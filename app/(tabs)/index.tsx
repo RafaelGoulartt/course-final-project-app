@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -11,34 +12,48 @@ import {
   View,
 } from 'react-native';
 
+import ScreenTime, { AppUsage } from '../../modules/screenTime';
+
 type TempoUsoPayload = {
   token: string;
-  dados: {
-    package_name: string;
-    tempo_minutos: number;
-    data_uso: string;
-  }[];
+  dados: AppUsage[];
+  dispositivo_id: string;
+  nome_filho: string;
 };
 
 function getToday() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function createAutomaticPayload(token: string): TempoUsoPayload {
-  const dataUso = getToday();
-  return {
-    token,
-    dados: [
-      { package_name: 'com.whatsapp', tempo_minutos: 42, data_uso: dataUso },
-      { package_name: 'com.google.android.youtube', tempo_minutos: 58, data_uso: dataUso },
-      { package_name: 'com.roblox.client', tempo_minutos: 35, data_uso: dataUso },
-    ],
-  };
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:3001/api';
+
+async function coletarDadosReais(): Promise<AppUsage[]> {
+  const temPermissao = await ScreenTime.hasPermission();
+
+  if (!temPermissao) {
+    return [];
+  }
+
+  const dados = await ScreenTime.getUsageStats(1);
+  return dados;
 }
 
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  (Platform.OS === 'android' ? 'http://10.0.2.2:3001/api' : 'http://localhost:3001/api');
+async function enviarDados(payload: TempoUsoPayload) {
+  const response = await fetch(`${API_BASE_URL}/dashboard/tempo-uso`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.message || 'Falha ao enviar dados.');
+  }
+
+  return data;
+}
 
 export default function LoginTokenScreen() {
   const [token, setToken] = useState('');
@@ -46,23 +61,46 @@ export default function LoginTokenScreen() {
   const [loading, setLoading] = useState(false);
   const [lastResponse, setLastResponse] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState('');
+  const [temPermissao, setTemPermissao] = useState<boolean | null>(null);
+  const [appsColetados, setAppsColetados] = useState(0);
+  const [modalPermissao, setModalPermissao] = useState(false);
 
-  async function enviarAutomatico(tokenValue: string) {
-    const payload = createAutomaticPayload(tokenValue);
+  useEffect(() => {
+    ScreenTime.hasPermission().then(setTemPermissao);
+  }, []);
 
-    const response = await fetch(`${API_BASE_URL}/dashboard/tempo-uso`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+  async function handleSolicitarPermissao() {
+    setModalPermissao(true);
+  }
 
-    const data = await response.json();
+  async function handleConfirmarPermissao() {
+    setModalPermissao(false);
+    await ScreenTime.requestPermission();
+    setTimeout(async () => {
+      const ok = await ScreenTime.hasPermission();
+      setTemPermissao(ok);
+      if (ok) Alert.alert('Pronto!', 'Permissao concedida com sucesso.');
+    }, 2000);
+  }
 
-    if (!response.ok) {
-      throw new Error(data?.message || 'Falha ao enviar dados automaticamente.');
+  async function sincronizar(tokenValue: string) {
+    let dados = await coletarDadosReais();
+
+    if (dados.length === 0) {
+      // Fallback: envia ao menos um registro simbólico para validar o token
+      dados = [{ package_name: 'sem.dados', tempo_minutos: 0, data_uso: getToday() }];
     }
 
-    return data;
+    setAppsColetados(dados.length);
+
+    const payload: TempoUsoPayload = {
+      token: tokenValue,
+      dados,
+      dispositivo_id: 'app-mobile-android',
+      nome_filho: 'Meu celular',
+    };
+    const result = await enviarDados(payload);
+    return result;
   }
 
   async function handleEntrar() {
@@ -77,7 +115,7 @@ export default function LoginTokenScreen() {
     setLastResponse('');
 
     try {
-      const data = await enviarAutomatico(tokenNormalizado);
+      const data = await sincronizar(tokenNormalizado);
       setIsLogged(true);
       setLastResponse(data?.message || 'Dados enviados com sucesso.');
       setLastSyncAt(new Date().toLocaleString('pt-BR'));
@@ -99,10 +137,10 @@ export default function LoginTokenScreen() {
     setLoading(true);
 
     try {
-      const data = await enviarAutomatico(tokenNormalizado);
+      const data = await sincronizar(tokenNormalizado);
       setLastResponse(data?.message || 'Dados enviados com sucesso.');
       setLastSyncAt(new Date().toLocaleString('pt-BR'));
-      Alert.alert('Sucesso', 'Nova sincronizacao enviada para a API.');
+      Alert.alert('Sucesso', 'Nova sincronizacao enviada.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erro ao sincronizar.';
       setLastResponse(message);
@@ -117,10 +155,32 @@ export default function LoginTokenScreen() {
     setToken('');
     setLastResponse('');
     setLastSyncAt('');
+    setAppsColetados(0);
   }
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.root}>
+      <Modal transparent animationType="fade" visible={modalPermissao} onRequestClose={() => setModalPermissao(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalIcon}>🔒</Text>
+            <Text style={styles.modalTitle}>Permissao necessaria</Text>
+            <Text style={styles.modalSubtitle}>Siga os passos abaixo para liberar o acesso:</Text>
+            {['Toque em "Ir para Configuracoes"', 'Encontre "App-Tcc" na lista', 'Toque nele e ligue a chave', 'Volte para o app'].map((step, i) => (
+              <View key={i} style={styles.modalStep}>
+                <View style={styles.modalStepBadge}><Text style={styles.modalStepNum}>{i + 1}</Text></View>
+                <Text style={styles.modalStepText}>{step}</Text>
+              </View>
+            ))}
+            <Pressable onPress={handleConfirmarPermissao} style={styles.modalButton}>
+              <Text style={styles.modalButtonText}>Ir para Configuracoes</Text>
+            </Pressable>
+            <Pressable onPress={() => setModalPermissao(false)} style={styles.modalCancel}>
+              <Text style={styles.modalCancelText}>Cancelar</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
       <View style={styles.bgBlobLeft} />
       <View style={styles.bgBlobRight} />
 
@@ -132,6 +192,25 @@ export default function LoginTokenScreen() {
             Use o token gerado pelo responsavel no dashboard web. Ao entrar, o envio para a API acontece automaticamente.
           </Text>
         </View>
+
+        {/* Banner de permissao */}
+        {Platform.OS === 'android' && temPermissao === false && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>Permissao necessaria</Text>
+            <Text style={styles.warningText}>
+              Para coletar o tempo de uso real de cada app, autorize o acesso nas configuracoes do celular.
+            </Text>
+            <Pressable onPress={handleSolicitarPermissao} style={styles.warningButton}>
+              <Text style={styles.warningButtonText}>Conceder permissao</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {Platform.OS === 'android' && temPermissao === true && (
+          <View style={styles.okPermissionCard}>
+            <Text style={styles.okPermissionText}>Permissao de uso concedida</Text>
+          </View>
+        )}
 
         {!isLogged ? (
           <View style={styles.card}>
@@ -150,12 +229,19 @@ export default function LoginTokenScreen() {
               <Text style={styles.primaryButtonText}>{loading ? 'Entrando...' : 'Entrar e sincronizar'}</Text>
             </Pressable>
 
-            <Text style={styles.helper}>Fluxo: valida token e envia dados de uso automaticamente.</Text>
+            <Text style={styles.helper}>
+              {temPermissao
+                ? 'Dados reais de uso serao coletados e enviados.'
+                : 'Conceda a permissao para coletar dados reais de uso.'}
+            </Text>
           </View>
         ) : (
           <View style={styles.card}>
             <Text style={styles.okTitle}>Conectado com sucesso</Text>
             <Text style={styles.infoText}>Ultima sincronizacao: {lastSyncAt || '-'}</Text>
+            {appsColetados > 0 && (
+              <Text style={styles.infoText}>{appsColetados} app(s) coletados</Text>
+            )}
 
             <View style={styles.actionsRow}>
               <Pressable onPress={handleSincronizarAgora} disabled={loading} style={[styles.primaryButton, styles.actionButton]}>
@@ -234,6 +320,49 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 8,
     lineHeight: 20,
+  },
+  warningCard: {
+    borderWidth: 1,
+    borderColor: '#854d0e',
+    backgroundColor: 'rgba(120,53,15,0.3)',
+    borderRadius: 18,
+    padding: 14,
+    gap: 8,
+  },
+  warningTitle: {
+    color: '#fbbf24',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  warningText: {
+    color: '#fde68a',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  warningButton: {
+    marginTop: 4,
+    backgroundColor: '#f59e0b',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  warningButtonText: {
+    color: '#1c1917',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  okPermissionCard: {
+    borderWidth: 1,
+    borderColor: '#166534',
+    backgroundColor: 'rgba(20,83,45,0.3)',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  okPermissionText: {
+    color: '#4ade80',
+    fontSize: 13,
+    fontWeight: '700',
   },
   card: {
     borderWidth: 1,
@@ -316,5 +445,83 @@ const styles = StyleSheet.create({
   response: {
     color: '#e2e8f0',
     fontSize: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalBox: {
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    gap: 10,
+  },
+  modalIcon: {
+    fontSize: 36,
+    textAlign: 'center',
+  },
+  modalTitle: {
+    color: '#f1f5f9',
+    fontSize: 20,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    color: '#94a3b8',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  modalStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12,
+    padding: 10,
+  },
+  modalStepBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 99,
+    backgroundColor: '#06b6d4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalStepNum: {
+    color: '#082f49',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  modalStepText: {
+    color: '#e2e8f0',
+    fontSize: 13,
+    flex: 1,
+  },
+  modalButton: {
+    marginTop: 8,
+    backgroundColor: '#06b6d4',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#082f49',
+    fontWeight: '900',
+    fontSize: 15,
+  },
+  modalCancel: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  modalCancelText: {
+    color: '#64748b',
+    fontSize: 13,
   },
 });
