@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -26,7 +26,7 @@ function getToday() {
 }
 
 const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:3001/api';
+  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://course-final-project-eta.vercel.app/api';
 
 async function coletarDadosReais(): Promise<AppUsage[]> {
   const temPermissao = await ScreenTime.hasPermission();
@@ -64,10 +64,57 @@ export default function LoginTokenScreen() {
   const [temPermissao, setTemPermissao] = useState<boolean | null>(null);
   const [appsColetados, setAppsColetados] = useState(0);
   const [modalPermissao, setModalPermissao] = useState(false);
+  const [proximaSync, setProximaSync] = useState('');
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tokenRef = useRef('');
 
   useEffect(() => {
     ScreenTime.hasPermission().then(setTemPermissao);
   }, []);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
+    if (isLogged) {
+      const INTERVAL_MS = 60 * 60 * 1000; // 1 hora
+
+      const calcularProxima = () => {
+        const proxima = new Date(Date.now() + INTERVAL_MS);
+        setProximaSync(proxima.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      };
+
+      calcularProxima();
+
+      syncIntervalRef.current = setInterval(async () => {
+        const t = tokenRef.current.trim();
+        if (!t) return;
+        try {
+          const data = await sincronizar(t);
+          setLastResponse(data?.message || 'Sincronizado automaticamente.');
+          setLastSyncAt(new Date().toLocaleString('pt-BR'));
+          calcularProxima();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Erro na sync automática.';
+          setLastResponse(message);
+        }
+      }, INTERVAL_MS);
+    } else {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      setProximaSync('');
+    }
+
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+  }, [isLogged]);
 
   async function handleSolicitarPermissao() {
     setModalPermissao(true);
@@ -87,7 +134,6 @@ export default function LoginTokenScreen() {
     let dados = await coletarDadosReais();
 
     if (dados.length === 0) {
-      // Fallback: envia ao menos um registro simbólico para validar o token
       dados = [{ package_name: 'sem.dados', tempo_minutos: 0, data_uso: getToday() }];
     }
 
@@ -99,6 +145,7 @@ export default function LoginTokenScreen() {
       dispositivo_id: 'app-mobile-android',
       nome_filho: 'Meu celular',
     };
+
     const result = await enviarDados(payload);
     return result;
   }
@@ -239,6 +286,9 @@ export default function LoginTokenScreen() {
           <View style={styles.card}>
             <Text style={styles.okTitle}>Conectado com sucesso</Text>
             <Text style={styles.infoText}>Ultima sincronizacao: {lastSyncAt || '-'}</Text>
+            {proximaSync !== '' && (
+              <Text style={styles.infoText}>Proxima sync automatica: {proximaSync}</Text>
+            )}
             {appsColetados > 0 && (
               <Text style={styles.infoText}>{appsColetados} app(s) coletados</Text>
             )}
@@ -261,6 +311,7 @@ export default function LoginTokenScreen() {
           <Text style={[styles.label, { marginTop: 10 }]}>Ultima resposta</Text>
           <Text style={styles.response}>{lastResponse || 'Nenhuma tentativa ainda.'}</Text>
         </View>
+
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -523,5 +574,48 @@ const styles = StyleSheet.create({
   modalCancelText: {
     color: '#64748b',
     fontSize: 13,
+  },
+  evidenceTitle: {
+    color: '#67e8f9',
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  evidenceSubtitle: {
+    color: '#64748b',
+    fontSize: 11,
+    marginBottom: 6,
+  },
+  appRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    paddingVertical: 5,
+  },
+  appName: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    flex: 1,
+    marginRight: 8,
+  },
+  appTime: {
+    color: '#34d399',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  payloadScroll: {
+    marginTop: 6,
+    backgroundColor: '#020617',
+    borderRadius: 8,
+    padding: 8,
+    maxHeight: 220,
+  },
+  payloadText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },
 });
