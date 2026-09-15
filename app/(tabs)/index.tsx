@@ -49,7 +49,8 @@ async function enviarDados(payload: TempoUsoPayload) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data?.message || 'Falha ao enviar dados.');
+    const detail = data?.detail ? ` (${data.detail})` : '';
+    throw new Error((data?.message || 'Falha ao enviar dados.') + detail);
   }
 
   return data;

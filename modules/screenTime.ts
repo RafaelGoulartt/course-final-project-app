@@ -14,18 +14,17 @@ function notSupported<T>(fallback: T): Promise<T> {
 
 export default {
   hasPermission(): Promise<boolean> {
-    if (Platform.OS !== 'android') return notSupported(false);
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
     return ScreenTime.hasPermission();
   },
 
   requestPermission(): Promise<boolean> {
-    if (Platform.OS !== 'android') return notSupported(false);
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
     return ScreenTime.requestPermission();
   },
 
-  // days: quantos dias para trás buscar (1 = só hoje)
   getUsageStats(days: number = 1): Promise<AppUsage[]> {
-    if (Platform.OS !== 'android') return notSupported([]);
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported([]);
     return ScreenTime.getUsageStats(days);
   },
 };
