@@ -25,6 +25,17 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Android push notifications
+
+Push notifications can appear while the app is closed after it is installed as an EAS development or production build. Configure an Expo EAS project and Firebase Cloud Messaging v1 credentials first:
+
+1. Run `eas init` in this folder; the generated EAS project ID is used when registering the push token. Alternatively, set `EXPO_PUBLIC_EAS_PROJECT_ID` during the app build.
+2. In Firebase, register an Android app with package `com.mobileapptcc`, download `google-services.json` to this folder, and set `android.googleServicesFile` to `./google-services.json` in `app.json`.
+3. Configure Android push credentials with `eas credentials -p android` and upload the Firebase service-account key (FCM v1).
+4. Apply `site/server/sql/notifications-migration.sql` to the database and rebuild/reinstall the Android app.
+
+Expo Go is not a supported target for remote push notifications in this project.
+
 ## Get a fresh project
 
 When you're ready, run:

@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
@@ -10,13 +11,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { getApiBaseUrl, setApiBaseUrl } from '../constants/api';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [apiBaseUrl, setApiBaseUrlInput] = useState(getApiBaseUrl());
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  function handleLogin() {
+  async function handleLogin() {
     if (!email || !password) {
       setError('Preencha todos os campos!');
       return;
@@ -28,7 +32,38 @@ export default function LoginScreen() {
     }
 
     setError('');
-    Alert.alert('Sucesso', 'Login realizado com sucesso!');
+    setLoading(true);
+
+    try {
+      const normalizedApiBaseUrl = setApiBaseUrl(apiBaseUrl);
+      if (!normalizedApiBaseUrl) {
+        setError('Informe a URL da API.');
+        return;
+      }
+
+      const response = await fetch(`${normalizedApiBaseUrl}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Não foi possível fazer login.');
+      }
+
+      Alert.alert('Sucesso', data.message || 'Login realizado com sucesso!', [
+        { text: 'Continuar', onPress: () => router.replace('/(tabs)') },
+      ]);
+    } catch (loginError) {
+      setError(
+        loginError instanceof Error
+          ? loginError.message
+          : 'Erro ao conectar com a API.',
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -43,6 +78,20 @@ export default function LoginScreen() {
         <View style={styles.center}>
           <View style={styles.card}>
             <Text style={styles.title}>Login</Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>API base</Text>
+              <TextInput
+                value={apiBaseUrl}
+                onChangeText={setApiBaseUrlInput}
+                placeholder="http://10.0.2.2:3001/api"
+                placeholderTextColor="#999"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                style={styles.input}
+              />
+            </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email</Text>
@@ -72,11 +121,14 @@ export default function LoginScreen() {
 
             <Pressable
               onPress={handleLogin}
+              disabled={loading}
               style={({ pressed }) => [
                 styles.loginBtn,
-                pressed && styles.loginBtnPressed,
+                (pressed || loading) && styles.loginBtnPressed,
               ]}>
-              <Text style={styles.loginBtnText}>Entrar</Text>
+              <Text style={styles.loginBtnText}>
+                {loading ? 'Entrando...' : 'Entrar'}
+              </Text>
             </Pressable>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}

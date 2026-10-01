@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 const { ScreenTime } = NativeModules;
 
@@ -21,6 +21,34 @@ export default {
   requestPermission(): Promise<boolean> {
     if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
     return ScreenTime.requestPermission();
+  },
+
+  configureBlocker(token: string, apiBaseUrl: string): Promise<boolean> {
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
+    return ScreenTime.configureBlocker(token, apiBaseUrl);
+  },
+
+  isBlockerEnabled(): Promise<boolean> {
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
+    return ScreenTime.isBlockerEnabled();
+  },
+
+  openBlockerSettings(): Promise<boolean> {
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
+    return ScreenTime.openBlockerSettings();
+  },
+
+  async requestNotificationPermission(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    if (Number(Platform.Version) < 33) return true;
+
+    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  },
+
+  showNotification(id: number, title: string, message: string): Promise<boolean> {
+    if (Platform.OS !== 'android' || !ScreenTime) return notSupported(false);
+    return ScreenTime.showNotification(id, title, message);
   },
 
   getUsageStats(days: number = 1): Promise<AppUsage[]> {

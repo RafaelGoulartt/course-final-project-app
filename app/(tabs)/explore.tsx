@@ -1,8 +1,5 @@
 import { Platform, StyleSheet, Text, View } from 'react-native';
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  (Platform.OS === 'android' ? 'http://10.0.2.2:3001/api' : 'http://localhost:3001/api');
+import { getApiBaseUrl } from '../../constants/api';
 
 export default function AjudaScreen() {
   return (
@@ -15,7 +12,7 @@ export default function AjudaScreen() {
 
       <View style={styles.card}>
         <Text style={styles.label}>URL atual</Text>
-        <Text style={styles.mono}>{API_BASE_URL}</Text>
+        <Text style={styles.mono}>{getApiBaseUrl()}</Text>
       </View>
 
       <View style={styles.card}>
@@ -30,7 +27,7 @@ export default function AjudaScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Celular fisico</Text>
-        <Text style={styles.cardText}>http://SEU_IP_LOCAL:3001/api</Text>
+        <Text style={styles.cardText}>http://10.205.251.243:3001/api</Text>
         <Text style={styles.helper}>Dica: use EXPO_PUBLIC_API_BASE_URL para configurar sem editar codigo.</Text>
       </View>
     </View>

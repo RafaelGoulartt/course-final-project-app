@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -13,6 +14,8 @@ import {
 } from 'react-native';
 
 import ScreenTime, { AppUsage } from '../../modules/screenTime';
+import { getApiBaseUrl } from '../../constants/api';
+import { registerPushDevice, showLocalNotification } from '../../services/pushNotifications';
 
 type TempoUsoPayload = {
   token: string;
@@ -21,12 +24,10 @@ type TempoUsoPayload = {
   nome_filho: string;
 };
 
-function getToday() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://course-final-project-eta.vercel.app/api';
+type PendingNotification = {
+  id: number;
+  mensagem: string;
+};
 
 async function coletarDadosReais(): Promise<AppUsage[]> {
   const temPermissao = await ScreenTime.hasPermission();
@@ -40,7 +41,7 @@ async function coletarDadosReais(): Promise<AppUsage[]> {
 }
 
 async function enviarDados(payload: TempoUsoPayload) {
-  const response = await fetch(`${API_BASE_URL}/dashboard/tempo-uso`, {
+  const response = await fetch(`${getApiBaseUrl()}/dashboard/tempo-uso`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -56,6 +57,24 @@ async function enviarDados(payload: TempoUsoPayload) {
   return data;
 }
 
+async function buscarNotificacoesPendentes(tokenValue: string): Promise<PendingNotification[]> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/dashboard/notificacoes/pendentes?token=${encodeURIComponent(tokenValue)}`,
+  );
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data?.notificacoes || [];
+}
+
+async function confirmarNotificacao(tokenValue: string, notificationId: number) {
+  const response = await fetch(`${getApiBaseUrl()}/dashboard/notificacoes/${notificationId}/confirmar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: tokenValue }),
+  });
+  if (!response.ok) throw new Error('Falha ao confirmar notificacao.');
+}
+
 export default function LoginTokenScreen() {
   const [token, setToken] = useState('');
   const [isLogged, setIsLogged] = useState(false);
@@ -63,23 +82,60 @@ export default function LoginTokenScreen() {
   const [lastResponse, setLastResponse] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState('');
   const [temPermissao, setTemPermissao] = useState<boolean | null>(null);
+  const [blockerEnabled, setBlockerEnabled] = useState(false);
   const [appsColetados, setAppsColetados] = useState(0);
   const [modalPermissao, setModalPermissao] = useState(false);
   const [proximaSync, setProximaSync] = useState('');
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tokenRef = useRef('');
+  const notificationCheckRef = useRef(false);
+  const syncHandlerRef = useRef(sincronizar);
+  const notificationCheckHandlerRef = useRef(verificarNotificacoes);
 
   useEffect(() => {
     ScreenTime.hasPermission().then(setTemPermissao);
+    ScreenTime.isBlockerEnabled().then(setBlockerEnabled);
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') ScreenTime.isBlockerEnabled().then(setBlockerEnabled);
+    });
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
 
+  async function verificarNotificacoes(tokenValue: string) {
+    if (!tokenValue || notificationCheckRef.current) return;
+    notificationCheckRef.current = true;
+
+    try {
+      const notifications = await buscarNotificacoesPendentes(tokenValue);
+      const notification = notifications[0];
+      if (!notification) return;
+
+      await showLocalNotification('Nova mensagem do painel', notification.mensagem);
+      await confirmarNotificacao(tokenValue, notification.id);
+    } catch {
+      // Tenta novamente no próximo intervalo se a API estiver indisponível.
+    } finally {
+      notificationCheckRef.current = false;
+    }
+  }
+
   useEffect(() => {
+    syncHandlerRef.current = sincronizar;
+    notificationCheckHandlerRef.current = verificarNotificacoes;
+  });
+
+  useEffect(() => {
+    let notificationInterval: ReturnType<typeof setInterval> | null = null;
     if (isLogged) {
       const INTERVAL_MS = 60 * 60 * 1000; // 1 hora
+      const NOTIFICATION_INTERVAL_MS = 15 * 1000;
 
       const calcularProxima = () => {
         const proxima = new Date(Date.now() + INTERVAL_MS);
@@ -92,7 +148,7 @@ export default function LoginTokenScreen() {
         const t = tokenRef.current.trim();
         if (!t) return;
         try {
-          const data = await sincronizar(t);
+          const data = await syncHandlerRef.current(t);
           setLastResponse(data?.message || 'Sincronizado automaticamente.');
           setLastSyncAt(new Date().toLocaleString('pt-BR'));
           calcularProxima();
@@ -101,11 +157,16 @@ export default function LoginTokenScreen() {
           setLastResponse(message);
         }
       }, INTERVAL_MS);
+      void notificationCheckHandlerRef.current(tokenRef.current.trim());
+      notificationInterval = setInterval(() => {
+        void notificationCheckHandlerRef.current(tokenRef.current.trim());
+      }, NOTIFICATION_INTERVAL_MS);
     } else {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
+      if (notificationInterval) clearInterval(notificationInterval);
       setProximaSync('');
     }
 
@@ -114,6 +175,7 @@ export default function LoginTokenScreen() {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
+      if (notificationInterval) clearInterval(notificationInterval);
     };
   }, [isLogged]);
 
@@ -127,15 +189,27 @@ export default function LoginTokenScreen() {
     setTimeout(async () => {
       const ok = await ScreenTime.hasPermission();
       setTemPermissao(ok);
-      if (ok) Alert.alert('Pronto!', 'Permissao concedida com sucesso.');
+      if (ok) {
+        const notificationsAllowed = await ScreenTime.requestNotificationPermission();
+        Alert.alert(
+          notificationsAllowed ? 'Pronto!' : 'Notificações desativadas',
+          notificationsAllowed
+            ? 'Permissão de uso concedida. As notificações também estão habilitadas.'
+            : 'A permissão de uso foi concedida, mas sem notificações o app não poderá avisar sobre mensagens do painel.',
+        );
+      }
     }, 2000);
   }
 
   async function sincronizar(tokenValue: string) {
-    let dados = await coletarDadosReais();
+    const dados = await coletarDadosReais();
 
     if (dados.length === 0) {
-      dados = [{ package_name: 'sem.dados', tempo_minutos: 0, data_uso: getToday() }];
+      throw new Error(
+        temPermissao === false
+          ? 'Conceda a permissao de acesso ao uso nas configuracoes do Android.'
+          : 'Nenhum tempo de uso foi registrado ainda.',
+      );
     }
 
     setAppsColetados(dados.length);
@@ -163,11 +237,43 @@ export default function LoginTokenScreen() {
     setLastResponse('');
 
     try {
+      await ScreenTime.configureBlocker(tokenNormalizado, getApiBaseUrl());
+      const hasAccessibility = await ScreenTime.isBlockerEnabled();
+      setBlockerEnabled(hasAccessibility);
+      if (!hasAccessibility) {
+        Alert.alert(
+          'Ative o bloqueio de apps',
+          'Habilite "Bloqueio temporário de apps" nas configurações de Acessibilidade para aplicar os bloqueios definidos no site.',
+          [
+            { text: 'Depois', style: 'cancel' },
+            { text: 'Abrir configurações', onPress: () => { void ScreenTime.openBlockerSettings(); } },
+          ],
+        );
+      }
+      let pushStatus = '';
+      try {
+        await registerPushDevice(tokenNormalizado);
+        pushStatus = ' Notificacoes push habilitadas.';
+      } catch (pushError) {
+        const detail = pushError instanceof Error ? pushError.message : 'Falha ao registrar push.';
+        pushStatus = ` Push indisponivel: ${detail}`;
+      }
+
       const data = await sincronizar(tokenNormalizado);
       setIsLogged(true);
-      setLastResponse(data?.message || 'Dados enviados com sucesso.');
+      setLastResponse((data?.message || 'Dados enviados com sucesso.') + pushStatus);
       setLastSyncAt(new Date().toLocaleString('pt-BR'));
       Alert.alert('Login realizado', 'Token valido. Dados enviados automaticamente.');
+      if (!hasAccessibility) {
+        Alert.alert(
+          'Ative o bloqueio de apps',
+          'Para impedir a abertura dos apps bloqueados no painel, habilite "Bloqueio temporário de apps" nas configurações de Acessibilidade do Android.',
+          [
+            { text: 'Depois', style: 'cancel' },
+            { text: 'Abrir configurações', onPress: () => { void ScreenTime.openBlockerSettings(); } },
+          ],
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erro ao validar token.';
       setIsLogged(false);
@@ -260,6 +366,18 @@ export default function LoginTokenScreen() {
           </View>
         )}
 
+        {Platform.OS === 'android' && token.trim() !== '' && !blockerEnabled && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>Bloqueio de apps desativado</Text>
+            <Text style={styles.warningText}>
+              Habilite o serviço de Acessibilidade para o app conseguir bloquear os apps selecionados no painel.
+            </Text>
+            <Pressable onPress={() => ScreenTime.openBlockerSettings()} style={styles.warningButton}>
+              <Text style={styles.warningButtonText}>Abrir Acessibilidade</Text>
+            </Pressable>
+          </View>
+        )}
+
         {!isLogged ? (
           <View style={styles.card}>
             <Text style={styles.label}>Token</Text>
@@ -307,7 +425,7 @@ export default function LoginTokenScreen() {
 
         <View style={styles.card}>
           <Text style={styles.label}>API base</Text>
-          <Text style={styles.mono}>{API_BASE_URL}</Text>
+          <Text style={styles.mono}>{getApiBaseUrl()}</Text>
 
           <Text style={[styles.label, { marginTop: 10 }]}>Ultima resposta</Text>
           <Text style={styles.response}>{lastResponse || 'Nenhuma tentativa ainda.'}</Text>
@@ -375,31 +493,31 @@ const styles = StyleSheet.create({
   },
   warningCard: {
     borderWidth: 1,
-    borderColor: '#854d0e',
-    backgroundColor: 'rgba(120,53,15,0.3)',
+    borderColor: '#0891b2',
+    backgroundColor: 'rgba(8,145,178,0.2)',
     borderRadius: 18,
     padding: 14,
     gap: 8,
   },
   warningTitle: {
-    color: '#fbbf24',
+    color: '#67e8f9',
     fontSize: 14,
     fontWeight: '800',
   },
   warningText: {
-    color: '#fde68a',
+    color: '#a5f3fc',
     fontSize: 13,
     lineHeight: 18,
   },
   warningButton: {
     marginTop: 4,
-    backgroundColor: '#f59e0b',
+    backgroundColor: '#06b6d4',
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: 'center',
   },
   warningButtonText: {
-    color: '#1c1917',
+    color: '#082f49',
     fontWeight: '800',
     fontSize: 13,
   },
