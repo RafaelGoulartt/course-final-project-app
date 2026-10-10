@@ -6,17 +6,21 @@ por isso ficam guardados aqui. Esta pasta não é compilada: ela é só a cópia
 
 | Arquivo | Destino em `android/` | O que faz |
 |---|---|---|
-| `ScreenTimeModule.kt` | `app/src/main/java/com/mobileapptcc/` | Lê o tempo de uso dos apps (`UsageStatsManager`) e expõe `hasPermission`, `requestPermission` e `getUsageStats` para o JS (`modules/screenTime.ts`) |
+| `ScreenTimeModule.kt` | `app/src/main/java/com/mobileapptcc/` | Ponte com o JS (`modules/screenTime.ts`): permissões de uso e de sobreposição, `getUsageStats`, liga/desliga o monitor e guarda dados simples (`getItem`/`setItem`) |
+| `UsageCalculator.kt` | `app/src/main/java/com/mobileapptcc/` | Calcula o tempo de cada app por dia do calendário a partir dos eventos do sistema (`UsageEvents`), cortando na meia-noite |
+| `MonitorService.kt` | `app/src/main/java/com/mobileapptcc/` | Serviço em segundo plano: consulta a API a cada minuto, notifica mensagens dos pais e abre a tela de bloqueio quando um app suspenso é aberto |
+| `BlockActivity.kt` | `app/src/main/java/com/mobileapptcc/` | Tela "App suspenso" mostrada por cima do app bloqueado |
+| `BootReceiver.kt` | `app/src/main/java/com/mobileapptcc/` | Religa o monitor depois de reiniciar o celular |
 | `ScreenTimePackage.kt` | `app/src/main/java/com/mobileapptcc/` | Registra o `ScreenTimeModule` no React Native |
 | `MainApplication.kt` | `app/src/main/java/com/mobileapptcc/` | Referência: o arquivo gerado, com a linha `add(ScreenTimePackage())` em `getPackages()` |
-| `AndroidManifest.xml` | `app/src/main/` | Referência: o manifest atual, com a permissão `android.permission.PACKAGE_USAGE_STATS` |
+| `AndroidManifest.xml` | `app/src/main/` | O manifest completo, com as permissões, o `<queries>` e o registro do serviço, da tela de bloqueio e do receiver |
 | `legacy/ScreenTimeModule.2026-05-13.kt` | não usar direto | Versão anterior do módulo (veja abaixo) |
 
 ## Restaurar depois de regerar o `android/`
 
 Se o `android/` for apagado ou regerado (`npx expo prebuild --clean`):
 
-1. Copie `ScreenTimeModule.kt` e `ScreenTimePackage.kt` para
+1. Copie todos os `.kt` desta pasta (menos o `MainApplication.kt`) para
    `android/app/src/main/java/com/mobileapptcc/`.
 2. Em `android/app/src/main/java/com/mobileapptcc/MainApplication.kt`, dentro de
    `getPackages()`, deixe:
@@ -25,13 +29,13 @@ Se o `android/` for apagado ou regerado (`npx expo prebuild --clean`):
      add(ScreenTimePackage())
    }
    ```
-3. Em `android/app/src/main/AndroidManifest.xml`, adicione dentro de `<manifest>`:
-   ```xml
-   <uses-permission
-     android:name="android.permission.PACKAGE_USAGE_STATS"
-     tools:ignore="ProtectedPermissions"
-     xmlns:tools="http://schemas.android.com/tools"/>
-   ```
+3. Copie o `AndroidManifest.xml` desta pasta por cima de `android/app/src/main/AndroidManifest.xml`.
+   Se o Expo tiver mudado algo no manifest gerado, compare os dois e junte só estas partes:
+   - as `<uses-permission>` de `PACKAGE_USAGE_STATS`, `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`,
+     `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS` e `RECEIVE_BOOT_COMPLETED`;
+   - as duas `<intent>` extras dentro de `<queries>` (`LAUNCHER` e `HOME`);
+   - a `<activity android:name=".BlockActivity">`, o `<service android:name=".MonitorService">`
+     e o `<receiver android:name=".BootReceiver">` dentro de `<application>`.
 4. Rode `npm install` (o `postinstall` reaplica as correções do NDK 27) e depois
    `npm run android`.
 

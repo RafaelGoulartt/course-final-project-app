@@ -28,6 +28,16 @@ const MAPPING = {
   'network': 'lan',
   'hourglass': 'hourglass-empty',
   'server.rack': 'dns',
+  'chevron.left': 'chevron-left',
+  'arrow.clockwise': 'refresh',
+  'clock.fill': 'schedule',
+  'chart.bar.fill': 'bar-chart',
+  'square.grid.2x2.fill': 'apps',
+  'nosign': 'block',
+  'bell.fill': 'notifications',
+  'message.fill': 'message',
+  'rectangle.portrait.and.arrow.right': 'logout',
+  'exclamationmark.triangle.fill': 'warning',
 } as IconMapping;
 
 /**

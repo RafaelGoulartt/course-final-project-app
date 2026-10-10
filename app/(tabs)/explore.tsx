@@ -1,12 +1,9 @@
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { API_BASE_URL } from '@/constants/api';
 import { Colors, MaxContentWidth, Radius, type ThemeColors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  (Platform.OS === 'android' ? 'http://10.0.2.2:3001/api' : 'http://localhost:3001/api');
 
 export default function AjudaScreen() {
   const scheme = useColorScheme() ?? 'light';

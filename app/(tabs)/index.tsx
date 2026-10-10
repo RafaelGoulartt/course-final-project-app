@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   KeyboardAvoidingView,
   Modal,
+  PermissionsAndroid,
   Platform,
   Pressable,
   ScrollView,
@@ -14,52 +16,44 @@ import {
 } from 'react-native';
 
 import { BrandLogo } from '@/components/brand-logo';
+import { HomeDashboard, type PermissaoPendente } from '@/components/home-dashboard';
+import { ParentMessageModal } from '@/components/parent-message-modal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { API_BASE_URL } from '@/constants/api';
 import { Colors, MaxContentWidth, NoWebFocusRing, Radius, type ThemeColors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import ScreenTime, { AppUsage } from '@/modules/screenTime';
+import {
+  carregarEstado,
+  enviarTempoUso,
+  marcarMensagemLida,
+  type MensagemPais,
+} from '@/services/device-api';
+import { diferencaEmDias, hojeIso } from '@/utils/periodo';
 
-import ScreenTime, { AppUsage } from '../../modules/screenTime';
+const CHAVE_TOKEN = 'token';
+const CHAVE_ULTIMA_SYNC_DATA = 'ultimaSyncData';
+const CHAVE_ULTIMA_SYNC_TEXTO = 'ultimaSyncTexto';
+const INTERVALO_SYNC_MS = 60 * 60 * 1000; // 1 hora
+const INTERVALO_MENSAGENS_MS = 60 * 1000; // 1 minuto
 
-type TempoUsoPayload = {
-  token: string;
-  dados: AppUsage[];
-  dispositivo_id: string;
-  nome_filho: string;
-};
+const PERMISSAO_NOTIFICACAO = 'android.permission.POST_NOTIFICATIONS' as const;
+const precisaPedirNotificacao = Platform.OS === 'android' && Number(Platform.Version) >= 33;
 
-function getToday() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://course-final-project-eta.vercel.app/api';
-
+/**
+ * Na primeira sincronização manda só o dia de hoje (00:00 até agora).
+ * Nas seguintes, manda desde o dia da última sincronização, para não perder o uso do fim da noite.
+ */
 async function coletarDadosReais(): Promise<AppUsage[]> {
-  const temPermissao = await ScreenTime.hasPermission();
-
-  if (!temPermissao) {
-    return [];
-  }
-
-  const dados = await ScreenTime.getUsageStats(1);
-  return dados;
+  if (!(await ScreenTime.hasPermission())) return [];
+  const ultima = await ScreenTime.getItem(CHAVE_ULTIMA_SYNC_DATA);
+  const dias = ultima ? Math.min(7, Math.max(1, diferencaEmDias(ultima, hojeIso()) + 1)) : 1;
+  return ScreenTime.getUsageStats(dias);
 }
 
-async function enviarDados(payload: TempoUsoPayload) {
-  const response = await fetch(`${API_BASE_URL}/dashboard/tempo-uso`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const detail = data?.detail ? ` (${data.detail})` : '';
-    throw new Error((data?.message || 'Falha ao enviar dados.') + detail);
-  }
-
-  return data;
+function agoraTexto() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 export default function LoginTokenScreen() {
@@ -69,73 +63,90 @@ export default function LoginTokenScreen() {
   const [tokenFocused, setTokenFocused] = useState(false);
   const [token, setToken] = useState('');
   const [isLogged, setIsLogged] = useState(false);
+  const [restaurando, setRestaurando] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [lastResponse, setLastResponse] = useState('');
+  const [statusSync, setStatusSync] = useState('');
   const [lastSyncAt, setLastSyncAt] = useState('');
+  const [versaoDados, setVersaoDados] = useState(0);
   const [temPermissao, setTemPermissao] = useState<boolean | null>(null);
-  const [appsColetados, setAppsColetados] = useState(0);
+  const [temSobreposicao, setTemSobreposicao] = useState(true);
+  const [temNotificacao, setTemNotificacao] = useState(true);
+  const [mensagens, setMensagens] = useState<MensagemPais[]>([]);
   // Modal de permissão: aberto ao tentar entrar sem permissão, ou pelo link discreto.
   const [modalPermissao, setModalPermissao] = useState<'entrar' | 'link' | null>(null);
   const [permissaoAdiada, setPermissaoAdiada] = useState(false);
-  const [proximaSync, setProximaSync] = useState('');
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tokenRef = useRef('');
-
-  useEffect(() => {
-    ScreenTime.hasPermission().then(setTemPermissao);
-  }, []);
 
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
 
-  useEffect(() => {
-    if (isLogged) {
-      const INTERVAL_MS = 60 * 60 * 1000; // 1 hora
-
-      const calcularProxima = () => {
-        const proxima = new Date(Date.now() + INTERVAL_MS);
-        setProximaSync(proxima.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-      };
-
-      calcularProxima();
-
-      syncIntervalRef.current = setInterval(async () => {
-        const t = tokenRef.current.trim();
-        if (!t) return;
-        try {
-          const data = await sincronizar(t);
-          setLastResponse(data?.message || 'Sincronizado automaticamente.');
-          setLastSyncAt(new Date().toLocaleString('pt-BR'));
-          calcularProxima();
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Erro na sync automática.';
-          setLastResponse(message);
-        }
-      }, INTERVAL_MS);
-    } else {
-      if (syncIntervalRef.current) {
-        clearInterval(syncIntervalRef.current);
-        syncIntervalRef.current = null;
-      }
-      setProximaSync('');
+  const verificarPermissoes = useCallback(async () => {
+    setTemPermissao(await ScreenTime.hasPermission());
+    setTemSobreposicao(await ScreenTime.hasOverlayPermission());
+    if (precisaPedirNotificacao) {
+      setTemNotificacao(await PermissionsAndroid.check(PERMISSAO_NOTIFICACAO));
     }
+  }, []);
 
-    return () => {
-      if (syncIntervalRef.current) {
-        clearInterval(syncIntervalRef.current);
-        syncIntervalRef.current = null;
+  // Restaura o vínculo salvo: quem já entrou uma vez não precisa colar o token de novo.
+  useEffect(() => {
+    (async () => {
+      await verificarPermissoes();
+      const salvo = await ScreenTime.getItem(CHAVE_TOKEN);
+      if (salvo) {
+        setToken(salvo);
+        setLastSyncAt((await ScreenTime.getItem(CHAVE_ULTIMA_SYNC_TEXTO)) ?? '');
+        setIsLogged(true);
+        ScreenTime.startMonitor(salvo, API_BASE_URL).catch(() => {});
+        sincronizarEmSegundoPlano(salvo);
       }
-    };
+      setRestaurando(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sincronização automática a cada hora enquanto o app está aberto.
+  useEffect(() => {
+    if (!isLogged) return;
+    const id = setInterval(() => {
+      const t = tokenRef.current.trim();
+      if (t) sincronizarEmSegundoPlano(t);
+    }, INTERVALO_SYNC_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLogged]);
 
-  // Rechecar a permissão quando o usuário volta das configurações do sistema.
+  // Mensagens dos pais: busca ao abrir o app e a cada minuto.
+  const buscarMensagens = useCallback(async () => {
+    const t = tokenRef.current.trim();
+    if (!t) return;
+    try {
+      const estado = await carregarEstado(t);
+      setMensagens(estado.mensagens);
+    } catch (error) {
+      if ((error as { status?: number }).status === 401) {
+        setStatusSync('O código de conexão expirou. Peça um novo no site e vincule de novo.');
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isLogged) return;
+    buscarMensagens();
+    const id = setInterval(buscarMensagens, INTERVALO_MENSAGENS_MS);
+    return () => clearInterval(id);
+  }, [isLogged, buscarMensagens]);
+
+  // Ao voltar para o app (das configurações ou de uma notificação), atualiza permissões e mensagens.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') ScreenTime.hasPermission().then(setTemPermissao);
+      if (state !== 'active') return;
+      verificarPermissoes();
+      buscarMensagens();
     });
     return () => sub.remove();
-  }, []);
+  }, [verificarPermissoes, buscarMensagens]);
 
   const precisaPermissao = Platform.OS === 'android' && temPermissao === false;
 
@@ -157,20 +168,43 @@ export default function LoginTokenScreen() {
     let dados = await coletarDadosReais();
 
     if (dados.length === 0) {
-      dados = [{ package_name: 'sem.dados', tempo_minutos: 0, data_uso: getToday() }];
+      dados = [{ package_name: 'sem.dados', tempo_minutos: 0, data_uso: hojeIso() }];
     }
 
-    setAppsColetados(dados.length);
+    const result = await enviarTempoUso(tokenValue, dados);
 
-    const payload: TempoUsoPayload = {
-      token: tokenValue,
-      dados,
-      dispositivo_id: 'app-mobile-android',
-      nome_filho: 'Meu celular',
-    };
-
-    const result = await enviarDados(payload);
+    const texto = agoraTexto();
+    setLastSyncAt(texto);
+    setStatusSync('');
+    setVersaoDados((v) => v + 1);
+    await ScreenTime.setItem(CHAVE_ULTIMA_SYNC_DATA, hojeIso());
+    await ScreenTime.setItem(CHAVE_ULTIMA_SYNC_TEXTO, texto);
     return result;
+  }
+
+  async function sincronizarEmSegundoPlano(tokenValue: string) {
+    setLoading(true);
+    try {
+      await sincronizar(tokenValue);
+    } catch (error) {
+      setStatusSync(error instanceof Error ? error.message : 'Erro ao sincronizar.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function pedirNotificacao() {
+    if (!precisaPedirNotificacao) return;
+    const resultado = await PermissionsAndroid.request(PERMISSAO_NOTIFICACAO);
+    setTemNotificacao(resultado === PermissionsAndroid.RESULTS.GRANTED);
+  }
+
+  async function handleEntendiMensagem() {
+    const [atual, ...resto] = mensagens;
+    setMensagens(resto);
+    if (atual) {
+      marcarMensagemLida(tokenRef.current.trim(), atual.id).catch(() => {});
+    }
   }
 
   function handleEntrar() {
@@ -192,50 +226,99 @@ export default function LoginTokenScreen() {
     const tokenNormalizado = token.trim();
 
     setLoading(true);
-    setLastResponse('');
+    setStatusSync('');
 
     try {
-      const data = await sincronizar(tokenNormalizado);
+      // Novo vínculo: a primeira sincronização manda só o dia de hoje.
+      await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_DATA);
+      await sincronizar(tokenNormalizado);
+      await ScreenTime.setItem(CHAVE_TOKEN, tokenNormalizado);
+      await ScreenTime.startMonitor(tokenNormalizado, API_BASE_URL).catch(() => {});
       setIsLogged(true);
-      setLastResponse(data?.message || 'Dados enviados com sucesso.');
-      setLastSyncAt(new Date().toLocaleString('pt-BR'));
-      Alert.alert('Login realizado', 'Token valido. Dados enviados automaticamente.');
+      await pedirNotificacao();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erro ao validar token.';
       setIsLogged(false);
-      setLastResponse(message);
       Alert.alert('Falha no login', message);
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleSincronizarAgora() {
-    const tokenNormalizado = token.trim();
-    if (!tokenNormalizado) return;
-
-    setLoading(true);
-
-    try {
-      const data = await sincronizar(tokenNormalizado);
-      setLastResponse(data?.message || 'Dados enviados com sucesso.');
-      setLastSyncAt(new Date().toLocaleString('pt-BR'));
-      Alert.alert('Sucesso', 'Nova sincronizacao enviada.');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Erro ao sincronizar.';
-      setLastResponse(message);
-      Alert.alert('Erro', message);
-    } finally {
-      setLoading(false);
-    }
+  function handleSair() {
+    Alert.alert(
+      'Desvincular este celular?',
+      'O tempo de uso deixa de ser enviado e as mensagens e bloqueios dos responsáveis param de funcionar.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desvincular',
+          style: 'destructive',
+          onPress: async () => {
+            await ScreenTime.stopMonitor();
+            await ScreenTime.removeItem(CHAVE_TOKEN);
+            await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_DATA);
+            await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_TEXTO);
+            setIsLogged(false);
+            setToken('');
+            setStatusSync('');
+            setLastSyncAt('');
+            setMensagens([]);
+          },
+        },
+      ],
+    );
   }
 
-  function handleSair() {
-    setIsLogged(false);
-    setToken('');
-    setLastResponse('');
-    setLastSyncAt('');
-    setAppsColetados(0);
+  const permissoesPendentes: PermissaoPendente[] = [
+    temPermissao === false && {
+      id: 'uso',
+      titulo: 'Acesso ao uso',
+      descricao: 'Para contar o tempo de cada app.',
+      onConceder: () => ScreenTime.requestPermission(),
+    },
+    !temSobreposicao && {
+      id: 'sobreposicao',
+      titulo: 'Sobrepor a outros apps',
+      descricao: 'Para mostrar o aviso quando um app for suspenso.',
+      onConceder: () => ScreenTime.requestOverlayPermission(),
+    },
+    !temNotificacao && {
+      id: 'notificacao',
+      titulo: 'Notificações',
+      descricao: 'Para avisar das mensagens dos responsáveis.',
+      onConceder: pedirNotificacao,
+    },
+  ].filter(Boolean) as PermissaoPendente[];
+
+  if (restaurando) {
+    return (
+      <View style={[styles.root, styles.centered]}>
+        <ActivityIndicator color={c.accent} />
+      </View>
+    );
+  }
+
+  if (isLogged) {
+    return (
+      <View style={styles.root}>
+        <HomeDashboard
+          token={token.trim()}
+          versaoDados={versaoDados}
+          ultimaSync={lastSyncAt}
+          sincronizando={loading}
+          statusSync={statusSync}
+          permissoesPendentes={permissoesPendentes}
+          onSincronizar={() => sincronizarEmSegundoPlano(token.trim())}
+          onSair={handleSair}
+        />
+        <ParentMessageModal
+          mensagem={mensagens[0] ?? null}
+          restantes={Math.max(0, mensagens.length - 1)}
+          onEntendi={handleEntendiMensagem}
+        />
+      </View>
+    );
   }
 
   const avisoPermissao = precisaPermissao && (
@@ -288,8 +371,7 @@ export default function LoginTokenScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <BrandLogo showTagline={false} />
 
-        {!isLogged ? (
-          <View style={styles.form}>
+        <View style={styles.form}>
             <TextInput
               value={token}
               onChangeText={setToken}
@@ -317,44 +399,7 @@ export default function LoginTokenScreen() {
             </Pressable>
 
             {avisoPermissao}
-          </View>
-        ) : (
-          <View style={styles.card}>
-            <View style={styles.statusRowInline}>
-              <IconSymbol name="checkmark.circle.fill" size={20} color={c.success} />
-              <Text style={styles.okTitle}>Conectado com sucesso</Text>
-            </View>
-            <Text style={styles.infoText}>Ultima sincronizacao: {lastSyncAt || '-'}</Text>
-            {proximaSync !== '' && (
-              <Text style={styles.infoText}>Proxima sync automatica: {proximaSync}</Text>
-            )}
-            {appsColetados > 0 && (
-              <Text style={styles.infoText}>{appsColetados} app(s) coletados</Text>
-            )}
-            {lastResponse !== '' && <Text style={styles.infoText}>{lastResponse}</Text>}
-
-            <View style={styles.actionsRow}>
-              <Pressable
-                onPress={handleSincronizarAgora}
-                disabled={loading}
-                style={({ pressed }) => [
-                  styles.primaryButton,
-                  styles.actionButton,
-                  pressed && styles.primaryButtonPressed,
-                  loading && styles.buttonDisabled,
-                ]}>
-                <Text style={styles.primaryButtonText}>{loading ? 'Sincronizando...' : 'Sincronizar agora'}</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleSair}
-                style={({ pressed }) => [styles.outlineButton, styles.actionButton, pressed && styles.outlineButtonPressed]}>
-                <Text style={styles.outlineButtonText}>Sair</Text>
-              </Pressable>
-            </View>
-
-            {avisoPermissao}
-          </View>
-        )}
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -376,30 +421,12 @@ function createStyles(c: ThemeColors) {
       paddingVertical: 40,
       gap: 32,
     },
+    centered: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     form: {
       gap: 12,
-    },
-    card: {
-      borderWidth: 1,
-      borderColor: c.border,
-      borderRadius: Radius.card,
-      padding: 16,
-      gap: 8,
-    },
-    statusRowInline: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-    },
-    okTitle: {
-      color: c.success,
-      fontSize: 16,
-      fontWeight: '800',
-    },
-    infoText: {
-      color: c.textMuted,
-      fontSize: 13,
-      marginTop: 3,
     },
     input: {
       borderWidth: 1,
@@ -448,16 +475,6 @@ function createStyles(c: ThemeColors) {
       color: c.text,
       fontSize: 14,
       fontWeight: '700',
-    },
-    actionsRow: {
-      marginTop: 10,
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 8,
-    },
-    actionButton: {
-      flexGrow: 1,
-      flexBasis: 140,
     },
     permissionLink: {
       flexDirection: 'row',
