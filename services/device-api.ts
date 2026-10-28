@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '@/constants/api';
-import type { AppUsage } from '@/modules/screenTime';
+import ScreenTime, { type AppUsage } from '@/modules/screenTime';
 
 export type Periodo = 'dia' | 'semana' | 'mes';
 
@@ -19,10 +19,27 @@ export type Resumo = {
 
 export type Estado = { mensagens: MensagemPais[]; suspensoes: SuspensaoAtiva[] };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Mesma chave lida pelo MonitorService (ScreenTimeModule.KEY_DISPOSITIVO_ID). */
+const CHAVE_DISPOSITIVO_ID = 'dispositivoId';
+
+// Identificador deste celular, criado uma vez e guardado. Vai para filhos.dispositivo_id.
+async function obterDispositivoId() {
+  const salvo = await ScreenTime.getItem(CHAVE_DISPOSITIVO_ID);
+  if (salvo) return salvo;
+  const novo = `android-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  await ScreenTime.setItem(CHAVE_DISPOSITIVO_ID, novo);
+  return novo;
+}
+
+// O código de conexão vai no cabeçalho Authorization, nunca na URL (a URL aparece nos logs do servidor).
+async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(init?.headers || {}),
+    },
   });
 
   let data: any = null;
@@ -41,30 +58,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export function enviarTempoUso(token: string, dados: AppUsage[]) {
-  return request<{ message?: string }>('/dashboard/tempo-uso', {
+export async function enviarTempoUso(token: string, dados: AppUsage[]) {
+  return request<{ message?: string }>('/dashboard/tempo-uso', token, {
     method: 'POST',
-    body: JSON.stringify({
-      token,
-      dados,
-      dispositivo_id: 'app-mobile-android',
-      nome_filho: 'Meu celular',
-    }),
+    body: JSON.stringify({ dados, dispositivo_id: await obterDispositivoId() }),
   });
 }
 
 export function carregarResumo(token: string, periodo: Periodo, data: string) {
-  const query = `token=${encodeURIComponent(token)}&periodo=${periodo}&data=${data}`;
-  return request<Resumo>(`/dashboard/dispositivo/resumo?${query}`);
+  return request<Resumo>(`/dashboard/dispositivo/resumo?periodo=${periodo}&data=${data}`, token);
 }
 
 export function carregarEstado(token: string) {
-  return request<Estado>(`/dashboard/dispositivo/estado?token=${encodeURIComponent(token)}`);
+  return request<Estado>('/dashboard/dispositivo/estado', token);
 }
 
 export function marcarMensagemLida(token: string, mensagemId: number) {
-  return request<{ ok: boolean }>(`/dashboard/dispositivo/mensagens/${mensagemId}/lida`, {
-    method: 'POST',
-    body: JSON.stringify({ token }),
-  });
+  return request<{ ok: boolean }>(`/dashboard/dispositivo/mensagens/${mensagemId}/lida`, token, { method: 'POST' });
 }

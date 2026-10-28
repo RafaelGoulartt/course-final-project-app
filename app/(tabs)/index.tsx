@@ -34,6 +34,11 @@ import { diferencaEmDias, hojeIso } from '@/utils/periodo';
 const CHAVE_TOKEN = 'token';
 const CHAVE_ULTIMA_SYNC_DATA = 'ultimaSyncData';
 const CHAVE_ULTIMA_SYNC_TEXTO = 'ultimaSyncTexto';
+/** Gravada pelo MonitorService quando o código deixa de valer com o app fechado. */
+const CHAVE_DESCONECTADO = 'desconectado';
+const AVISO_DESCONECTADO = 'Os responsáveis desconectaram este celular ou o código venceu. Peça um código novo no site.';
+
+const ehNaoAutorizado = (error: unknown) => (error as { status?: number })?.status === 401;
 const INTERVALO_SYNC_MS = 60 * 60 * 1000; // 1 hora
 const INTERVALO_MENSAGENS_MS = 60 * 1000; // 1 minuto
 
@@ -93,6 +98,10 @@ export default function LoginTokenScreen() {
   useEffect(() => {
     (async () => {
       await verificarPermissoes();
+      if (await ScreenTime.getItem(CHAVE_DESCONECTADO)) {
+        await ScreenTime.removeItem(CHAVE_DESCONECTADO);
+        Alert.alert('Celular desconectado', AVISO_DESCONECTADO);
+      }
       const salvo = await ScreenTime.getItem(CHAVE_TOKEN);
       if (salvo) {
         setToken(salvo);
@@ -125,10 +134,9 @@ export default function LoginTokenScreen() {
       const estado = await carregarEstado(t);
       setMensagens(estado.mensagens);
     } catch (error) {
-      if ((error as { status?: number }).status === 401) {
-        setStatusSync('O código de conexão expirou. Peça um novo no site e vincule de novo.');
-      }
+      if (ehNaoAutorizado(error)) await perderVinculo();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -193,7 +201,8 @@ export default function LoginTokenScreen() {
     try {
       await sincronizar(tokenValue);
     } catch (error) {
-      setStatusSync(error instanceof Error ? error.message : 'Erro ao sincronizar.');
+      if (ehNaoAutorizado(error)) await perderVinculo();
+      else setStatusSync(error instanceof Error ? error.message : 'Erro ao sincronizar.');
     } finally {
       setLoading(false);
     }
@@ -215,7 +224,7 @@ export default function LoginTokenScreen() {
 
   function handleEntrar() {
     if (!token.trim()) {
-      Alert.alert('Token obrigatorio', 'Informe o token gerado no dashboard do pai.');
+      Alert.alert('Código obrigatório', 'Informe o código gerado no painel dos pais, no site.');
       return;
     }
 
@@ -243,12 +252,33 @@ export default function LoginTokenScreen() {
       setIsLogged(true);
       await pedirNotificacao();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Erro ao validar token.';
+      const message = error instanceof Error ? error.message : 'Erro ao validar o código.';
       setIsLogged(false);
       Alert.alert('Falha no login', message);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function limparVinculo() {
+    await ScreenTime.stopMonitor();
+    await ScreenTime.removeItem(CHAVE_TOKEN);
+    await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_DATA);
+    await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_TEXTO);
+    await ScreenTime.removeItem(CHAVE_DESCONECTADO);
+    tokenRef.current = '';
+    setIsLogged(false);
+    setToken('');
+    setStatusSync('');
+    setLastSyncAt('');
+    setMensagens([]);
+  }
+
+  // O código deixou de valer com o app aberto: volta para a tela de código e avisa uma vez.
+  async function perderVinculo() {
+    if (!tokenRef.current) return;
+    await limparVinculo();
+    Alert.alert('Celular desconectado', AVISO_DESCONECTADO);
   }
 
   function handleSair() {
@@ -257,21 +287,7 @@ export default function LoginTokenScreen() {
       'O tempo de uso deixa de ser enviado e as mensagens e bloqueios dos responsáveis param de funcionar.',
       [
         { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Desvincular',
-          style: 'destructive',
-          onPress: async () => {
-            await ScreenTime.stopMonitor();
-            await ScreenTime.removeItem(CHAVE_TOKEN);
-            await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_DATA);
-            await ScreenTime.removeItem(CHAVE_ULTIMA_SYNC_TEXTO);
-            setIsLogged(false);
-            setToken('');
-            setStatusSync('');
-            setLastSyncAt('');
-            setMensagens([]);
-          },
-        },
+        { text: 'Desvincular', style: 'destructive', onPress: limparVinculo },
       ],
     );
   }
@@ -381,9 +397,9 @@ export default function LoginTokenScreen() {
             <TextInput
               value={token}
               onChangeText={setToken}
-              placeholder="Cole o token aqui"
+              placeholder="Cole o código aqui"
               placeholderTextColor={c.textMuted}
-              accessibilityLabel="Token"
+              accessibilityLabel="Código de conexão"
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="go"

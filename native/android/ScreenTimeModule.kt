@@ -128,6 +128,10 @@ class ScreenTimeModule(private val reactContext: ReactApplicationContext) :
         const val STORAGE_PREFS = "tcc_storage"
         const val KEY_ULTIMA_SYNC_DATA = "ultimaSyncData"
         const val KEY_ULTIMA_SYNC_TEXTO = "ultimaSyncTexto"
+        const val KEY_TOKEN = "token"
+        const val KEY_DISPOSITIVO_ID = "dispositivoId"
+        /** "1" quando o serviço encerrou porque o código deixou de valer; o JS avisa e apaga. */
+        const val KEY_DESCONECTADO = "desconectado"
 
         fun hasUsagePermission(context: Context): Boolean = try {
             val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager

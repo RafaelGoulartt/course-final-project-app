@@ -19,7 +19,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -144,15 +143,18 @@ class MonitorService : Service() {
     private fun consultarApi() {
         val sessao = lerSessao(this) ?: return
         try {
-            val url = URL(
-                "${sessao.apiUrl.trimEnd('/')}/dashboard/dispositivo/estado?token=" +
-                    URLEncoder.encode(sessao.token, "UTF-8")
-            )
+            val url = URL("${sessao.apiUrl.trimEnd('/')}/dashboard/dispositivo/estado")
             val conexao = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10_000
                 readTimeout = 10_000
+                setRequestProperty("Authorization", "Bearer ${sessao.token}")
             }
             val status = conexao.responseCode
+            if (status == 401) {
+                conexao.disconnect()
+                encerrarSessao()
+                return
+            }
             if (status != 200) {
                 Log.w(TAG, "API respondeu $status")
                 conexao.disconnect()
@@ -168,6 +170,21 @@ class MonitorService : Service() {
             Log.w(TAG, "Falha ao consultar API", e)
         }
         sincronizarUsoSePreciso(sessao)
+    }
+
+    /**
+     * O código deixou de valer (os pais desconectaram o celular ou ele venceu): libera os apps
+     * suspensos, esquece o código e para o serviço. Ao abrir, o app volta para a tela de código.
+     */
+    private fun encerrarSessao() {
+        Log.i(TAG, "Código de conexão inválido: encerrando o monitoramento")
+        suspensoes = emptyMap()
+        limparSessao(this)
+        getSharedPreferences(ScreenTimeModule.STORAGE_PREFS, Context.MODE_PRIVATE).edit()
+            .remove(ScreenTimeModule.KEY_TOKEN)
+            .putString(ScreenTimeModule.KEY_DESCONECTADO, "1")
+            .apply()
+        stopSelf()
     }
 
     // --- Envio do tempo de uso em segundo plano --------------------------------------------
@@ -205,10 +222,8 @@ class MonitorService : Service() {
                     )
                 }
                 val corpo = JSONObject()
-                    .put("token", sessao.token)
                     .put("dados", dados)
-                    .put("dispositivo_id", "app-mobile-android")
-                    .put("nome_filho", "Meu celular")
+                    .put("dispositivo_id", storage.getString(ScreenTimeModule.KEY_DISPOSITIVO_ID, null) ?: "app-mobile-android")
                     .toString()
 
                 val conexao = (URL("${sessao.apiUrl.trimEnd('/')}/dashboard/tempo-uso").openConnection() as HttpURLConnection).apply {
@@ -217,10 +232,15 @@ class MonitorService : Service() {
                     connectTimeout = 10_000
                     readTimeout = 20_000
                     setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Authorization", "Bearer ${sessao.token}")
                 }
                 conexao.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
                 val status = conexao.responseCode
                 conexao.disconnect()
+                if (status == 401) {
+                    encerrarSessao()
+                    return
+                }
                 if (status !in 200..299) {
                     Log.w(TAG, "Envio do tempo de uso respondeu $status")
                     // Tenta de novo em ~10 minutos.
