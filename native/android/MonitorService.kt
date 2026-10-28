@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.provider.Telephony
+import android.telecom.TelecomManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -20,6 +22,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.Executors
@@ -33,11 +36,42 @@ data class Suspensao(val nome: String, val fim: Long?) {
 data class Limite(val nome: String, val minutosDia: Int)
 
 /**
+ * Horario bloqueado. inicio/fim em minutos do dia (21:00 = 1260); inicio > fim atravessa a meia-noite.
+ * dias: 0 = domingo ... 6 = sabado, contando o dia em que o horario comeca.
+ */
+data class Horario(val nome: String, val inicio: Int, val fim: Int, val dias: Set<Int>) {
+    /** Se o horario vale agora, devolve quando ele acaba (millis); senao, null. */
+    fun fimSeAtivo(agora: Long): Long? {
+        val cal = Calendar.getInstance().apply { timeInMillis = agora }
+        val minuto = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val hoje = cal.get(Calendar.DAY_OF_WEEK) - 1
+        val ontem = (hoje + 6) % 7
+        val termina = when {
+            inicio < fim && hoje in dias && minuto >= inicio && minuto < fim -> 0
+            inicio > fim && hoje in dias && minuto >= inicio -> 1 // acaba amanha
+            inicio > fim && ontem in dias && minuto < fim -> 0 // comecou ontem a noite
+            else -> return null
+        }
+        cal.add(Calendar.DAY_OF_YEAR, termina)
+        cal.set(Calendar.HOUR_OF_DAY, fim / 60)
+        cal.set(Calendar.MINUTE, fim % 60)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    companion object {
+        /** "21:00" -> 1260 */
+        fun minutos(hhmm: String): Int = hhmm.substring(0, 2).toInt() * 60 + hhmm.substring(3, 5).toInt()
+    }
+}
+
+/**
  * Servico em primeiro plano que:
- *  - consulta a API a cada minuto (mensagens novas, apps suspensos e limites diarios);
+ *  - consulta a API a cada minuto (mensagens novas, apps suspensos, limites diarios e horarios);
  *  - mostra uma notificacao para cada mensagem nova dos pais;
- *  - verifica a cada segundo qual app esta aberto e, se estiver suspenso ou tiver passado do
- *    limite do dia, abre a BlockActivity.
+ *  - verifica a cada segundo qual app esta aberto e, se estiver suspenso, tiver passado do
+ *    limite do dia ou estiver num horario bloqueado, abre a BlockActivity.
  */
 class MonitorService : Service() {
 
@@ -48,6 +82,10 @@ class MonitorService : Service() {
     private var suspensoes: Map<String, Suspensao> = emptyMap()
     @Volatile
     private var limites: Map<String, Limite> = emptyMap()
+    @Volatile
+    private var horarios: List<Horario> = emptyList()
+    // Apps que continuam abrindo num horario bloqueado (telefone, SMS, contatos, relogio, sistema).
+    private var permitidosNoHorario: Set<String> = emptySet()
     // Minutos de hoje por app, recalculados no maximo a cada USO_VALIDO_MS (o calculo le os eventos do dia).
     private var usoHoje: Map<String, Double> = emptyMap()
     private var usoHojeEm = 0L
@@ -76,6 +114,8 @@ class MonitorService : Service() {
         ignorar = UsageCalculator.pacotesIgnorados(this) + packageName
         suspensoes = lerSuspensoesSalvas()
         limites = lerLimitesSalvos()
+        horarios = lerHorariosSalvos()
+        permitidosNoHorario = calcularPermitidosNoHorario()
         ultimaVerificacao = System.currentTimeMillis() - 5 * 60 * 1000L
         handler.post(verificarApp)
         rede = Executors.newSingleThreadScheduledExecutor().also {
@@ -125,7 +165,8 @@ class MonitorService : Service() {
         val agora = System.currentTimeMillis()
         val ativas = suspensoes.filterValues { it.ativa(agora) }
         val limitesAtuais = limites
-        if ((ativas.isEmpty() && limitesAtuais.isEmpty()) || !ScreenTimeModule.hasUsagePermission(this)) {
+        val horarioAtivo = horarios.firstNotNullOfOrNull { h -> h.fimSeAtivo(agora)?.let { h to it } }
+        if ((ativas.isEmpty() && limitesAtuais.isEmpty() && horarioAtivo == null) || !ScreenTimeModule.hasUsagePermission(this)) {
             ultimaVerificacao = agora
             return
         }
@@ -139,6 +180,12 @@ class MonitorService : Service() {
         val suspensao = ativas[pacote]
         if (suspensao != null) {
             bloquear(agora, BlockActivity.intent(this, suspensao.nome, suspensao.fim))
+            return
+        }
+
+        if (horarioAtivo != null && pacote !in permitidosNoHorario) {
+            val (horario, fim) = horarioAtivo
+            bloquear(agora, BlockActivity.intentHorario(this, horario.nome, fim))
             return
         }
 
@@ -199,6 +246,7 @@ class MonitorService : Service() {
             val json = JSONObject(corpo)
             atualizarSuspensoes(json)
             atualizarLimites(json)
+            atualizarHorarios(json)
             notificarMensagens(json)
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao consultar API", e)
@@ -214,6 +262,7 @@ class MonitorService : Service() {
         Log.i(TAG, "Código de conexão inválido: encerrando o monitoramento")
         suspensoes = emptyMap()
         limites = emptyMap()
+        horarios = emptyList()
         limparSessao(this)
         getSharedPreferences(ScreenTimeModule.STORAGE_PREFS, Context.MODE_PRIVATE).edit()
             .remove(ScreenTimeModule.KEY_TOKEN)
@@ -382,6 +431,55 @@ class MonitorService : Service() {
             item.getString("package_name") to Limite(item.optString("nome"), item.getInt("minutos_dia"))
         }
 
+    private fun atualizarHorarios(json: JSONObject) {
+        val lista = json.optJSONArray("horarios") ?: return
+        horarios = parseHorarios(lista)
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_HORARIOS, lista.toString()).apply()
+    }
+
+    private fun lerHorariosSalvos(): List<Horario> = try {
+        val salvo = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_HORARIOS, null)
+        if (salvo == null) emptyList() else parseHorarios(JSONArray(salvo))
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun parseHorarios(lista: JSONArray): List<Horario> =
+        (0 until lista.length()).map { i ->
+            val item = lista.getJSONObject(i)
+            val dias = item.getJSONArray("dias")
+            Horario(
+                item.optString("nome"),
+                Horario.minutos(item.getString("inicio")),
+                Horario.minutos(item.getString("fim")),
+                (0 until dias.length()).map { dias.getInt(it) }.toSet(),
+            )
+        }
+
+    /** Telefone, SMS, contatos, relogio e telas do sistema: a crianca precisa deles mesmo no horario bloqueado. */
+    private fun calcularPermitidosNoHorario(): Set<String> {
+        val padrao = mutableSetOf(
+            "com.android.settings",
+            "com.android.systemui",
+            "com.android.phone",
+            "com.android.server.telecom",
+            "com.android.emergency",
+            "com.android.contacts",
+            "com.google.android.contacts",
+            "com.google.android.dialer",
+            "com.android.dialer",
+            "com.android.deskclock",
+            "com.google.android.deskclock",
+            "com.google.android.permissioncontroller",
+            "com.android.permissioncontroller",
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            getSystemService(TelecomManager::class.java)?.defaultDialerPackage?.let { padrao.add(it) }
+        }
+        Telephony.Sms.getDefaultSmsPackage(this)?.let { padrao.add(it) }
+        return padrao + ignorar
+    }
+
     data class Sessao(val token: String, val apiUrl: String)
 
     companion object {
@@ -391,6 +489,7 @@ class MonitorService : Service() {
         private const val KEY_API_URL = "api_url"
         private const val KEY_SUSPENSOES = "suspensoes"
         private const val KEY_LIMITES = "limites"
+        private const val KEY_HORARIOS = "horarios"
         private const val USO_VALIDO_MS = 15_000L
         private const val KEY_NOTIFICADAS = "mensagens_notificadas"
         private const val CANAL_MONITOR = "monitor"

@@ -51,8 +51,16 @@ class BlockActivity : Activity() {
                 "responsáveis definiram. Ele libera de novo amanhã."
             return
         }
-        titulo.text = "App suspenso"
         val fim = intent.getLongExtra(EXTRA_FIM, -1L)
+        val horario = intent.getStringExtra(EXTRA_HORARIO)
+        if (horario != null) {
+            titulo.text = horario.ifBlank { "Horário bloqueado" }
+            mensagem.text = "Os apps estão bloqueados agora e voltam às " +
+                "${SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(fim))}. " +
+                "Telefone e mensagens continuam funcionando."
+            return
+        }
+        titulo.text = "App suspenso"
         val ate = if (fim > 0) {
             "até as ${SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(fim))}"
         } else {
@@ -123,6 +131,7 @@ class BlockActivity : Activity() {
         private const val EXTRA_NOME = "nome"
         private const val EXTRA_FIM = "fim"
         private const val EXTRA_LIMITE_MINUTOS = "limite_minutos"
+        private const val EXTRA_HORARIO = "horario"
 
         /** App suspenso pelos pais. fim null = até eles liberarem. */
         fun intent(context: Context, nome: String, fim: Long?) =
@@ -134,6 +143,10 @@ class BlockActivity : Activity() {
         /** App que passou do limite diário. */
         fun intentLimite(context: Context, nome: String, minutos: Int) =
             intent(context, nome, null).putExtra(EXTRA_LIMITE_MINUTOS, minutos)
+
+        /** Horário bloqueado (ex.: "Hora de dormir") que acaba em fim. */
+        fun intentHorario(context: Context, nomeHorario: String, fim: Long) =
+            intent(context, "", fim).putExtra(EXTRA_HORARIO, nomeHorario)
 
         fun formatarMinutos(minutos: Int): String {
             val h = minutos / 60
