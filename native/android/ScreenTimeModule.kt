@@ -124,7 +124,10 @@ class ScreenTimeModule(private val reactContext: ReactApplicationContext) :
     }
 
     companion object {
-        private const val STORAGE_PREFS = "tcc_storage"
+        /** Mesmo arquivo usado pelo JS (getItem/setItem) e pelo MonitorService. */
+        const val STORAGE_PREFS = "tcc_storage"
+        const val KEY_ULTIMA_SYNC_DATA = "ultimaSyncData"
+        const val KEY_ULTIMA_SYNC_TEXTO = "ultimaSyncTexto"
 
         fun hasUsagePermission(context: Context): Boolean = try {
             val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager

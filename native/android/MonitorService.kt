@@ -15,6 +15,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -166,6 +167,77 @@ class MonitorService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao consultar API", e)
         }
+        sincronizarUsoSePreciso(sessao)
+    }
+
+    // --- Envio do tempo de uso em segundo plano --------------------------------------------
+
+    /**
+     * A cada hora manda o tempo de uso para a API, mesmo que a criança nunca abra o app.
+     * Usa o mesmo registro de "última sincronização" do app (tcc_storage), então os dois
+     * mandam sempre desde o dia do último envio, sem perder o uso do fim da noite.
+     */
+    private fun sincronizarUsoSePreciso(sessao: Sessao) {
+        val monitor = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val agora = System.currentTimeMillis()
+        if (agora - monitor.getLong(KEY_ULTIMA_SYNC_MS, 0L) < INTERVALO_SYNC_USO_MS) return
+        if (!ScreenTimeModule.hasUsagePermission(this)) return
+
+        val storage = getSharedPreferences(ScreenTimeModule.STORAGE_PREFS, Context.MODE_PRIVATE)
+        val formatoData = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val hoje = formatoData.format(agora)
+        val dias = storage.getString(ScreenTimeModule.KEY_ULTIMA_SYNC_DATA, null)
+            ?.let { formatoData.parse(it)?.time }
+            ?.let { ultima -> (((formatoData.parse(hoje)!!.time - ultima) / 86_400_000L).toInt() + 1).coerceIn(1, 7) }
+            ?: 1
+
+        try {
+            val usos = UsageCalculator.calcularPorDia(this, dias)
+            if (usos.isNotEmpty()) {
+                val dados = JSONArray()
+                for (uso in usos) {
+                    dados.put(
+                        JSONObject()
+                            .put("package_name", uso.packageName)
+                            .put("nome", uso.nome)
+                            .put("tempo_minutos", uso.minutos)
+                            .put("data_uso", uso.data)
+                    )
+                }
+                val corpo = JSONObject()
+                    .put("token", sessao.token)
+                    .put("dados", dados)
+                    .put("dispositivo_id", "app-mobile-android")
+                    .put("nome_filho", "Meu celular")
+                    .toString()
+
+                val conexao = (URL("${sessao.apiUrl.trimEnd('/')}/dashboard/tempo-uso").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 10_000
+                    readTimeout = 20_000
+                    setRequestProperty("Content-Type", "application/json")
+                }
+                conexao.outputStream.use { it.write(corpo.toByteArray(Charsets.UTF_8)) }
+                val status = conexao.responseCode
+                conexao.disconnect()
+                if (status !in 200..299) {
+                    Log.w(TAG, "Envio do tempo de uso respondeu $status")
+                    // Tenta de novo em ~10 minutos.
+                    monitor.edit().putLong(KEY_ULTIMA_SYNC_MS, agora - INTERVALO_SYNC_USO_MS + 10 * 60_000L).apply()
+                    return
+                }
+            }
+            monitor.edit().putLong(KEY_ULTIMA_SYNC_MS, agora).apply()
+            storage.edit()
+                .putString(ScreenTimeModule.KEY_ULTIMA_SYNC_DATA, hoje)
+                .putString(ScreenTimeModule.KEY_ULTIMA_SYNC_TEXTO, SimpleDateFormat("HH:mm", Locale.US).format(agora))
+                .apply()
+            Log.i(TAG, "Tempo de uso enviado em segundo plano (${usos.size} registros, $dias dia(s))")
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao enviar tempo de uso", e)
+            monitor.edit().putLong(KEY_ULTIMA_SYNC_MS, agora - INTERVALO_SYNC_USO_MS + 10 * 60_000L).apply()
+        }
     }
 
     private fun atualizarSuspensoes(json: JSONObject) {
@@ -250,6 +322,8 @@ class MonitorService : Service() {
         private const val ID_NOTIFICACAO_MENSAGEM = 1000
         private const val INTERVALO_BLOQUEIO_MS = 1000L
         private const val INTERVALO_API_S = 60L
+        private const val INTERVALO_SYNC_USO_MS = 60 * 60 * 1000L // 1 hora
+        private const val KEY_ULTIMA_SYNC_MS = "ultima_sync_uso_ms"
 
         fun salvarSessao(context: Context, token: String, apiUrl: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

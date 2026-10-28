@@ -140,10 +140,16 @@ export default function LoginTokenScreen() {
 
   // Ao voltar para o app (das configurações ou de uma notificação), atualiza permissões e mensagens.
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
+    const sub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
       verificarPermissoes();
       buscarMensagens();
+      // O serviço em segundo plano também sincroniza: mostra o horário dele e recarrega os números.
+      const texto = await ScreenTime.getItem(CHAVE_ULTIMA_SYNC_TEXTO);
+      setLastSyncAt((anterior) => {
+        if (texto && texto !== anterior) setVersaoDados((v) => v + 1);
+        return texto ?? anterior;
+      });
     });
     return () => sub.remove();
   }, [verificarPermissoes, buscarMensagens]);
