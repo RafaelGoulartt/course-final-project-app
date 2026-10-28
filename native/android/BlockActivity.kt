@@ -22,6 +22,7 @@ import java.util.Locale
  */
 class BlockActivity : Activity() {
 
+    private lateinit var titulo: TextView
     private lateinit var mensagem: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,6 +44,14 @@ class BlockActivity : Activity() {
 
     private fun atualizarTexto(intent: Intent) {
         val nome = intent.getStringExtra(EXTRA_NOME).orEmpty().ifBlank { "Este app" }
+        val limiteMinutos = intent.getIntExtra(EXTRA_LIMITE_MINUTOS, -1)
+        if (limiteMinutos > 0) {
+            titulo.text = "Limite do dia atingido"
+            mensagem.text = "Você já usou $nome por ${formatarMinutos(limiteMinutos)} hoje, o limite que seus " +
+                "responsáveis definiram. Ele libera de novo amanhã."
+            return
+        }
+        titulo.text = "App suspenso"
         val fim = intent.getLongExtra(EXTRA_FIM, -1L)
         val ate = if (fim > 0) {
             "até as ${SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(fim))}"
@@ -76,14 +85,14 @@ class BlockActivity : Activity() {
             textSize = 48f
             gravity = Gravity.CENTER
         })
-        addView(TextView(context).apply {
-            text = "App suspenso"
+        titulo = TextView(context).apply {
             textSize = 26f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#F8FAFC"))
             gravity = Gravity.CENTER
             setPadding(0, dp(16), 0, dp(8))
-        })
+        }
+        addView(titulo)
         mensagem = TextView(context).apply {
             textSize = 16f
             setTextColor(Color.parseColor("#94A3B8"))
@@ -113,11 +122,27 @@ class BlockActivity : Activity() {
     companion object {
         private const val EXTRA_NOME = "nome"
         private const val EXTRA_FIM = "fim"
+        private const val EXTRA_LIMITE_MINUTOS = "limite_minutos"
 
+        /** App suspenso pelos pais. fim null = até eles liberarem. */
         fun intent(context: Context, nome: String, fim: Long?) =
             Intent(context, BlockActivity::class.java)
                 .putExtra(EXTRA_NOME, nome)
                 .putExtra(EXTRA_FIM, fim ?: -1L)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        /** App que passou do limite diário. */
+        fun intentLimite(context: Context, nome: String, minutos: Int) =
+            intent(context, nome, null).putExtra(EXTRA_LIMITE_MINUTOS, minutos)
+
+        fun formatarMinutos(minutos: Int): String {
+            val h = minutos / 60
+            val m = minutos % 60
+            return when {
+                h == 0 -> "$m min"
+                m == 0 -> "${h}h"
+                else -> "${h}h $m min"
+            }
+        }
     }
 }

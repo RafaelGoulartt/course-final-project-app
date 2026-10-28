@@ -8,8 +8,8 @@ por isso ficam guardados aqui. Esta pasta não é compilada: ela é só a cópia
 |---|---|---|
 | `ScreenTimeModule.kt` | `app/src/main/java/com/mobileapptcc/` | Ponte com o JS (`modules/screenTime.ts`): permissões de uso e de sobreposição, `getUsageStats`, liga/desliga o monitor e guarda dados simples (`getItem`/`setItem`) |
 | `UsageCalculator.kt` | `app/src/main/java/com/mobileapptcc/` | Calcula o tempo de cada app por dia do calendário a partir dos eventos do sistema (`UsageEvents`), cortando na meia-noite |
-| `MonitorService.kt` | `app/src/main/java/com/mobileapptcc/` | Serviço em segundo plano: consulta a API a cada minuto, notifica mensagens dos pais e abre a tela de bloqueio quando um app suspenso é aberto |
-| `BlockActivity.kt` | `app/src/main/java/com/mobileapptcc/` | Tela "App suspenso" mostrada por cima do app bloqueado |
+| `MonitorService.kt` | `app/src/main/java/com/mobileapptcc/` | Serviço em segundo plano: consulta a API a cada minuto, envia o tempo de uso a cada hora, notifica mensagens dos pais e abre a tela de bloqueio quando um app suspenso (ou que passou do limite diário) é aberto. Para sozinho se o código deixar de valer (401) |
+| `BlockActivity.kt` | `app/src/main/java/com/mobileapptcc/` | Tela "App suspenso" ou "Limite do dia atingido" mostrada por cima do app bloqueado |
 | `BootReceiver.kt` | `app/src/main/java/com/mobileapptcc/` | Religa o monitor depois de reiniciar o celular |
 | `ScreenTimePackage.kt` | `app/src/main/java/com/mobileapptcc/` | Registra o `ScreenTimeModule` no React Native |
 | `MainApplication.kt` | `app/src/main/java/com/mobileapptcc/` | Referência: o arquivo gerado, com a linha `add(ScreenTimePackage())` em `getPackages()` |

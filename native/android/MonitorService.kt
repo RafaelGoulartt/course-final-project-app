@@ -30,11 +30,14 @@ data class Suspensao(val nome: String, val fim: Long?) {
     fun ativa(agora: Long) = fim == null || fim > agora
 }
 
+data class Limite(val nome: String, val minutosDia: Int)
+
 /**
  * Servico em primeiro plano que:
- *  - consulta a API a cada minuto (mensagens novas e apps suspensos);
+ *  - consulta a API a cada minuto (mensagens novas, apps suspensos e limites diarios);
  *  - mostra uma notificacao para cada mensagem nova dos pais;
- *  - verifica a cada segundo qual app esta aberto e, se estiver suspenso, abre a BlockActivity.
+ *  - verifica a cada segundo qual app esta aberto e, se estiver suspenso ou tiver passado do
+ *    limite do dia, abre a BlockActivity.
  */
 class MonitorService : Service() {
 
@@ -43,6 +46,11 @@ class MonitorService : Service() {
 
     @Volatile
     private var suspensoes: Map<String, Suspensao> = emptyMap()
+    @Volatile
+    private var limites: Map<String, Limite> = emptyMap()
+    // Minutos de hoje por app, recalculados no maximo a cada USO_VALIDO_MS (o calculo le os eventos do dia).
+    private var usoHoje: Map<String, Double> = emptyMap()
+    private var usoHojeEm = 0L
     private var ultimaVerificacao = 0L
     private var appAtual: String? = null
     private var ultimoBloqueio = 0L
@@ -67,6 +75,7 @@ class MonitorService : Service() {
         iniciarEmPrimeiroPlano()
         ignorar = UsageCalculator.pacotesIgnorados(this) + packageName
         suspensoes = lerSuspensoesSalvas()
+        limites = lerLimitesSalvos()
         ultimaVerificacao = System.currentTimeMillis() - 5 * 60 * 1000L
         handler.post(verificarApp)
         rede = Executors.newSingleThreadScheduledExecutor().also {
@@ -115,7 +124,8 @@ class MonitorService : Service() {
     private fun verificarAppAberto() {
         val agora = System.currentTimeMillis()
         val ativas = suspensoes.filterValues { it.ativa(agora) }
-        if (ativas.isEmpty() || !ScreenTimeModule.hasUsagePermission(this)) {
+        val limitesAtuais = limites
+        if ((ativas.isEmpty() && limitesAtuais.isEmpty()) || !ScreenTimeModule.hasUsagePermission(this)) {
             ultimaVerificacao = agora
             return
         }
@@ -125,8 +135,19 @@ class MonitorService : Service() {
 
         val pacote = appAtual ?: return
         if (pacote in ignorar) return
-        val suspensao = ativas[pacote] ?: return
 
+        val suspensao = ativas[pacote]
+        if (suspensao != null) {
+            bloquear(agora, BlockActivity.intent(this, suspensao.nome, suspensao.fim))
+            return
+        }
+
+        val limite = limitesAtuais[pacote] ?: return
+        if (minutosHoje(pacote, agora) < limite.minutosDia) return
+        bloquear(agora, BlockActivity.intentLimite(this, limite.nome, limite.minutosDia))
+    }
+
+    private fun bloquear(agora: Long, intent: Intent) {
         // Evita abrir a tela varias vezes enquanto o sistema ainda nao registrou a troca de app.
         if (agora - ultimoBloqueio < 1500) return
         ultimoBloqueio = agora
@@ -135,7 +156,19 @@ class MonitorService : Service() {
             Log.w(TAG, "Sem permissao de sobreposicao: nao da para abrir a tela de bloqueio")
             return
         }
-        startActivity(BlockActivity.intent(this, suspensao.nome, suspensao.fim))
+        startActivity(intent)
+    }
+
+    /** Uso de hoje (desde a meia-noite) do app, incluindo a sessão aberta agora. */
+    private fun minutosHoje(pacote: String, agora: Long): Double {
+        if (agora - usoHojeEm > USO_VALIDO_MS) {
+            val hoje = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(agora)
+            usoHoje = UsageCalculator.calcularPorDia(this, 1)
+                .filter { it.data == hoje }
+                .associate { it.packageName to it.minutos }
+            usoHojeEm = agora
+        }
+        return usoHoje[pacote] ?: 0.0
     }
 
     // --- API ------------------------------------------------------------------------------
@@ -165,6 +198,7 @@ class MonitorService : Service() {
 
             val json = JSONObject(corpo)
             atualizarSuspensoes(json)
+            atualizarLimites(json)
             notificarMensagens(json)
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao consultar API", e)
@@ -179,6 +213,7 @@ class MonitorService : Service() {
     private fun encerrarSessao() {
         Log.i(TAG, "Código de conexão inválido: encerrando o monitoramento")
         suspensoes = emptyMap()
+        limites = emptyMap()
         limparSessao(this)
         getSharedPreferences(ScreenTimeModule.STORAGE_PREFS, Context.MODE_PRIVATE).edit()
             .remove(ScreenTimeModule.KEY_TOKEN)
@@ -327,6 +362,26 @@ class MonitorService : Service() {
         emptyMap()
     }
 
+    private fun atualizarLimites(json: JSONObject) {
+        val lista = json.optJSONArray("limites") ?: return
+        limites = parseLimites(lista)
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LIMITES, lista.toString()).apply()
+    }
+
+    // Como as suspensoes, o limite continua valendo sem internet.
+    private fun lerLimitesSalvos(): Map<String, Limite> = try {
+        val salvo = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LIMITES, null)
+        if (salvo == null) emptyMap() else parseLimites(JSONArray(salvo))
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
+    private fun parseLimites(lista: JSONArray): Map<String, Limite> =
+        (0 until lista.length()).associate { i ->
+            val item = lista.getJSONObject(i)
+            item.getString("package_name") to Limite(item.optString("nome"), item.getInt("minutos_dia"))
+        }
+
     data class Sessao(val token: String, val apiUrl: String)
 
     companion object {
@@ -335,6 +390,8 @@ class MonitorService : Service() {
         private const val KEY_TOKEN = "token"
         private const val KEY_API_URL = "api_url"
         private const val KEY_SUSPENSOES = "suspensoes"
+        private const val KEY_LIMITES = "limites"
+        private const val USO_VALIDO_MS = 15_000L
         private const val KEY_NOTIFICADAS = "mensagens_notificadas"
         private const val CANAL_MONITOR = "monitor"
         private const val CANAL_MENSAGENS = "mensagens"
