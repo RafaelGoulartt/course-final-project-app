@@ -1,50 +1,36 @@
-# Welcome to your Expo app 👋
+# App do celular (TCC)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App Android (Expo + React Native) instalado no celular da criança. Ele:
 
-## Get started
+- conecta ao painel dos pais com o **código de conexão** gerado no site;
+- envia o tempo de uso de cada app (pelo app aberto e, a cada hora, pelo serviço em segundo plano);
+- mostra as mensagens dos responsáveis e bloqueia os apps que eles suspenderem.
 
-1. Install dependencies
+Site e API ficam no repositório `course-final-project`.
 
-   ```bash
-   npm install
-   ```
+## Onde está cada coisa
 
-2. Start the app
+| Pasta | O que tem |
+|---|---|
+| `app/(tabs)/index.tsx` | Tela única: código de conexão, permissões e painel com os gráficos |
+| `components/` | Painel (`home-dashboard`), modal de mensagem dos pais, logo e ícones |
+| `services/device-api.ts` | Chamadas à API (o código vai no cabeçalho `Authorization`) |
+| `modules/screenTime.ts` | Ponte JS do módulo nativo ScreenTime |
+| `native/android/` | Cópia versionada do código Kotlin (o `android/` é gerado e fica fora do git). Veja o README de lá |
 
-   ```bash
-   npx expo start
-   ```
+## Rodar
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Veja o passo a passo em [COMANDOS.md](COMANDOS.md). Resumo:
 
 ```bash
-npm run reset-project
+npm install          # o postinstall aplica as correções do build Android (NDK 27)
+npm run android      # compila e instala no celular/emulador
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Para usar a API local, crie `.env.local` com `EXPO_PUBLIC_API_BASE_URL=http://SEU_IP:3001/api`
+e reinicie o Metro com `npx expo start -c`.
 
-## Learn more
+## Limitações conhecidas
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- Só funciona no Android: o iOS não permite ler o tempo de uso de outros apps.
+- A criança consegue desinstalar o app ou tirar as permissões nas configurações.
