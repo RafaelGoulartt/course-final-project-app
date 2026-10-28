@@ -38,6 +38,7 @@ const MAPPING = {
   'message.fill': 'message',
   'rectangle.portrait.and.arrow.right': 'logout',
   'exclamationmark.triangle.fill': 'warning',
+  'moon.fill': 'bedtime',
 } as IconMapping;
 
 /**

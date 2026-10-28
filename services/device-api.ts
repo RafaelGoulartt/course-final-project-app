@@ -17,7 +17,17 @@ export type Resumo = {
   suspensoes: SuspensaoAtiva[];
 };
 
-export type Estado = { mensagens: MensagemPais[]; suspensoes: SuspensaoAtiva[] };
+export type LimiteApp = { package_name: string; nome: string; minutos_dia: number };
+/** inicio/fim "HH:MM"; dias 0 = domingo ... 6 = sábado. */
+export type HorarioBloqueado = { nome: string; inicio: string; fim: string; dias: number[] };
+
+export type Estado = {
+  mensagens: MensagemPais[];
+  suspensoes: SuspensaoAtiva[];
+  // Versões antigas da API não mandam estes dois.
+  limites?: LimiteApp[];
+  horarios?: HorarioBloqueado[];
+};
 
 /** Mesma chave lida pelo MonitorService (ScreenTimeModule.KEY_DISPOSITIVO_ID). */
 const CHAVE_DISPOSITIVO_ID = 'dispositivoId';

@@ -27,6 +27,8 @@ import {
   carregarEstado,
   enviarTempoUso,
   marcarMensagemLida,
+  type HorarioBloqueado,
+  type LimiteApp,
   type MensagemPais,
 } from '@/services/device-api';
 import { diferencaEmDias, hojeIso } from '@/utils/periodo';
@@ -77,6 +79,10 @@ export default function LoginTokenScreen() {
   const [temSobreposicao, setTemSobreposicao] = useState(true);
   const [temNotificacao, setTemNotificacao] = useState(true);
   const [mensagens, setMensagens] = useState<MensagemPais[]>([]);
+  const [limites, setLimites] = useState<LimiteApp[]>([]);
+  const [horarios, setHorarios] = useState<HorarioBloqueado[]>([]);
+  // Minutos de hoje por app, contados no próprio celular (mais atual que o último envio).
+  const [usoHoje, setUsoHoje] = useState<Record<string, number>>({});
   // Modal de permissão: aberto ao tentar entrar sem permissão, ou pelo link discreto.
   const [modalPermissao, setModalPermissao] = useState<'entrar' | 'link' | null>(null);
   const [permissaoAdiada, setPermissaoAdiada] = useState(false);
@@ -133,6 +139,13 @@ export default function LoginTokenScreen() {
     try {
       const estado = await carregarEstado(t);
       setMensagens(estado.mensagens);
+      setLimites(estado.limites ?? []);
+      setHorarios(estado.horarios ?? []);
+      if (estado.limites?.length) {
+        const hoje = hojeIso();
+        const usos = await ScreenTime.getUsageStats(1).catch(() => [] as AppUsage[]);
+        setUsoHoje(Object.fromEntries(usos.filter((u) => u.data_uso === hoje).map((u) => [u.package_name, u.tempo_minutos])));
+      }
     } catch (error) {
       if (ehNaoAutorizado(error)) await perderVinculo();
     }
@@ -272,6 +285,8 @@ export default function LoginTokenScreen() {
     setStatusSync('');
     setLastSyncAt('');
     setMensagens([]);
+    setLimites([]);
+    setHorarios([]);
   }
 
   // O código deixou de valer com o app aberto: volta para a tela de código e avisa uma vez.
@@ -331,6 +346,9 @@ export default function LoginTokenScreen() {
           sincronizando={loading}
           statusSync={statusSync}
           permissoesPendentes={permissoesPendentes}
+          limites={limites}
+          horarios={horarios}
+          usoHoje={usoHoje}
           onSincronizar={() => sincronizarEmSegundoPlano(token.trim())}
           onSair={handleSair}
         />

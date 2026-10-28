@@ -4,7 +4,14 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, T
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors, MaxContentWidth, Radius, type ThemeColors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { carregarResumo, type Periodo, type Resumo } from '@/services/device-api';
+import {
+  carregarResumo,
+  type HorarioBloqueado,
+  type LimiteApp,
+  type Periodo,
+  type Resumo,
+} from '@/services/device-api';
+import { descreverDias, horarioAtivo } from '@/utils/regras';
 import {
   PERIODOS,
   diaDaSemanaCurto,
@@ -33,6 +40,10 @@ type Props = {
   sincronizando: boolean;
   statusSync: string;
   permissoesPendentes: PermissaoPendente[];
+  limites: LimiteApp[];
+  horarios: HorarioBloqueado[];
+  /** Minutos de hoje por pacote, contados no celular. */
+  usoHoje: Record<string, number>;
   onSincronizar: () => void;
   onSair: () => void;
 };
@@ -46,6 +57,9 @@ export function HomeDashboard({
   sincronizando,
   statusSync,
   permissoesPendentes,
+  limites,
+  horarios,
+  usoHoje,
   onSincronizar,
   onSair,
 }: Props) {
@@ -160,6 +174,59 @@ export function HomeDashboard({
               <Text style={styles.muted}>{s.fim ? `até ${formatarHora(s.fim)}` : 'até liberarem'}</Text>
             </View>
           ))}
+        </View>
+      )}
+
+      {/* Limites diários e horários bloqueados */}
+      {(limites.length > 0 || horarios.length > 0) && (
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <IconSymbol name="hourglass" size={18} color={c.accent} />
+            <Text style={styles.cardTitle}>Regras dos seus responsáveis</Text>
+          </View>
+          {limites.map((l) => {
+            const usado = Math.round(usoHoje[l.package_name] ?? 0);
+            const restante = Math.max(0, l.minutos_dia - usado);
+            return (
+              <View key={l.package_name} style={{ gap: 4 }}>
+                <View style={styles.suspensaoRow}>
+                  <Text style={styles.itemTitle}>{l.nome}</Text>
+                  <Text style={[styles.muted, restante === 0 && styles.error]}>
+                    {restante === 0 ? 'acabou por hoje' : `restam ${formatarMinutos(restante)}`}
+                  </Text>
+                </View>
+                <View style={styles.track}>
+                  <View
+                    style={[
+                      styles.bar,
+                      restante === 0 && styles.barDanger,
+                      { width: `${Math.min(100, (usado / l.minutos_dia) * 100)}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.mutedSmall}>
+                  {formatarMinutos(usado)} de {formatarMinutos(l.minutos_dia)} por dia
+                </Text>
+              </View>
+            );
+          })}
+          {horarios.map((h) => {
+            const ativo = horarioAtivo(h);
+            return (
+              <View key={`${h.nome}-${h.inicio}`} style={styles.suspensaoRow}>
+                <View style={[styles.row, { flex: 1 }]}>
+                  <IconSymbol name="moon.fill" size={16} color={ativo ? c.danger : c.textMuted} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitle}>{h.nome}</Text>
+                    <Text style={styles.mutedSmall}>
+                      {h.inicio} às {h.fim} · {descreverDias(h.dias)}
+                    </Text>
+                  </View>
+                </View>
+                {ativo && <Text style={styles.error}>agora</Text>}
+              </View>
+            );
+          })}
         </View>
       )}
 
@@ -415,6 +482,7 @@ function createStyles(c: ThemeColors) {
     appTime: { color: c.text, fontSize: 13, fontWeight: '700' },
     track: { height: 6, borderRadius: Radius.full, backgroundColor: c.border, overflow: 'hidden' },
     bar: { height: '100%', borderRadius: Radius.full, backgroundColor: c.accent },
+    barDanger: { backgroundColor: c.danger },
     chart: { flexDirection: 'row', alignItems: 'flex-end', height: 170, gap: 3, marginTop: 4 },
     chartCol: { flex: 1, alignItems: 'center', height: '100%' },
     chartBarArea: { flex: 1, width: '100%', justifyContent: 'flex-end', alignItems: 'center' },
