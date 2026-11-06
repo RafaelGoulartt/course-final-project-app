@@ -39,6 +39,8 @@ const MAPPING = {
   'rectangle.portrait.and.arrow.right': 'logout',
   'exclamationmark.triangle.fill': 'warning',
   'moon.fill': 'bedtime',
+  'qrcode.viewfinder': 'qr-code-scanner',
+  'xmark': 'close',
 } as IconMapping;
 
 /**

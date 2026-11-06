@@ -18,6 +18,7 @@ import {
 import { BrandLogo } from '@/components/brand-logo';
 import { HomeDashboard, type PermissaoPendente } from '@/components/home-dashboard';
 import { ParentMessageModal } from '@/components/parent-message-modal';
+import { QrScannerModal } from '@/components/qr-scanner-modal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { API_BASE_URL } from '@/constants/api';
 import { Colors, MaxContentWidth, NoWebFocusRing, Radius, type ThemeColors } from '@/constants/theme';
@@ -86,6 +87,7 @@ export default function LoginTokenScreen() {
   // Modal de permissão: aberto ao tentar entrar sem permissão, ou pelo link discreto.
   const [modalPermissao, setModalPermissao] = useState<'entrar' | 'link' | null>(null);
   const [permissaoAdiada, setPermissaoAdiada] = useState(false);
+  const [lendoQr, setLendoQr] = useState(false);
   const tokenRef = useRef('');
 
   useEffect(() => {
@@ -235,8 +237,8 @@ export default function LoginTokenScreen() {
     }
   }
 
-  function handleEntrar() {
-    if (!token.trim()) {
+  function handleEntrar(codigo: string = token) {
+    if (!codigo.trim()) {
       Alert.alert('Código obrigatório', 'Informe o código gerado no painel dos pais, no site.');
       return;
     }
@@ -247,11 +249,18 @@ export default function LoginTokenScreen() {
       return;
     }
 
-    entrar();
+    entrar(codigo);
   }
 
-  async function entrar() {
-    const tokenNormalizado = token.trim();
+  // O QR code traz o mesmo código do campo de texto: segue o mesmo caminho de entrar.
+  function handleQrLido(codigo: string) {
+    setLendoQr(false);
+    setToken(codigo);
+    handleEntrar(codigo);
+  }
+
+  async function entrar(codigo: string = token) {
+    const tokenNormalizado = codigo.trim();
 
     setLoading(true);
     setStatusSync('');
@@ -421,14 +430,14 @@ export default function LoginTokenScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="go"
-              onSubmitEditing={handleEntrar}
+              onSubmitEditing={() => handleEntrar()}
               onFocus={() => setTokenFocused(true)}
               onBlur={() => setTokenFocused(false)}
               style={[styles.input, tokenFocused && styles.inputFocused]}
             />
 
             <Pressable
-              onPress={handleEntrar}
+              onPress={() => handleEntrar()}
               disabled={loading}
               style={({ pressed }) => [
                 styles.primaryButton,
@@ -438,9 +447,25 @@ export default function LoginTokenScreen() {
               <Text style={styles.primaryButtonText}>{loading ? 'Entrando...' : 'Entrar'}</Text>
             </Pressable>
 
+            <Pressable
+              onPress={() => setLendoQr(true)}
+              disabled={loading}
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                styles.outlineButton,
+                styles.outlineButtonRow,
+                pressed && styles.outlineButtonPressed,
+                loading && styles.buttonDisabled,
+              ]}>
+              <IconSymbol name="qrcode.viewfinder" size={18} color={c.text} />
+              <Text style={styles.outlineButtonText}>Escanear QR code</Text>
+            </Pressable>
+
             {avisoPermissao}
         </View>
       </ScrollView>
+
+      <QrScannerModal visivel={lendoQr} onLido={handleQrLido} onFechar={() => setLendoQr(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -507,6 +532,11 @@ function createStyles(c: ThemeColors) {
       paddingVertical: 13,
       paddingHorizontal: 16,
       alignItems: 'center',
+    },
+    outlineButtonRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: 8,
     },
     outlineButtonPressed: {
       borderColor: c.borderStrong,

@@ -32,7 +32,8 @@ Se o `android/` for apagado ou regerado (`npx expo prebuild --clean`):
 3. Copie o `AndroidManifest.xml` desta pasta por cima de `android/app/src/main/AndroidManifest.xml`.
    Se o Expo tiver mudado algo no manifest gerado, compare os dois e junte só estas partes:
    - as `<uses-permission>` de `PACKAGE_USAGE_STATS`, `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`,
-     `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS` e `RECEIVE_BOOT_COMPLETED`;
+     `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` e `CAMERA`,
+     mais a remoção de `RECORD_AUDIO` (o `expo-camera` pede microfone, que o app não usa);
    - as duas `<intent>` extras dentro de `<queries>` (`LAUNCHER` e `HOME`);
    - a `<activity android:name=".BlockActivity">`, o `<service android:name=".MonitorService">`
      e o `<receiver android:name=".BootReceiver">` dentro de `<application>`.
